@@ -1,10 +1,8 @@
 # mobile-terminal
 
-A minimal web UI for controlling [tmux](https://github.com/tmux/tmux) sessions from your phone or any browser. One Python file, no WebSockets, no JavaScript frameworks.
+A minimal web UI for controlling tmux sessions from your phone or any browser. One Python file, no WebSockets, no JavaScript frameworks.
 
-## Why
-
-Sometimes you need to check on a long-running process, restart a service, or run a quick command on your dev machine — but you only have your phone. This gives you a mobile-friendly terminal interface over HTTP.
+Initiate new claude sessions on your phone. Or, initiate via the tmux window on your machine and continue them via your phone. 
 
 ## Features
 
