@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-"""Mobile terminal for Big Mac — simple form-based version."""
+"""Mobile web terminal for remote tmux control."""
+import os
 import re
+import shutil
 import subprocess
-import time
+import sys
 from pathlib import Path
 
-from fastapi import FastAPI, Form
+from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 
 app = FastAPI()
-SESSION = "mobile"
-WORK_DIR = str(Path.home() / "Code" / "galaxy")
+SESSION = os.environ.get("TMUX_SESSION", "mobile")
+WORK_DIR = os.environ.get("TMUX_WORK_DIR", str(Path.home()))
+TITLE = os.environ.get("TERMINAL_TITLE", "Mobile Terminal")
+HOST = os.environ.get("HOST", "127.0.0.1")
+PORT = int(os.environ.get("PORT", "7681"))
 
 ANSI_RE = re.compile(
     r'\x1b\[[0-9;]*[a-zA-Z]'
@@ -25,9 +30,10 @@ ANSI_RE = re.compile(
 def ensure_session():
     r = subprocess.run(["tmux", "has-session", "-t", SESSION], capture_output=True)
     if r.returncode != 0:
+        work_dir = WORK_DIR if Path(WORK_DIR).is_dir() else str(Path.home())
         subprocess.run([
             "tmux", "new-session", "-d", "-s", SESSION,
-            "-x", "80", "-y", "50", "-c", WORK_DIR,
+            "-x", "80", "-y", "50", "-c", work_dir,
         ])
 
 
@@ -74,7 +80,8 @@ def list_windows() -> list:
 
 
 def new_window():
-    subprocess.run(["tmux", "new-window", "-t", SESSION, "-c", WORK_DIR])
+    work_dir = WORK_DIR if Path(WORK_DIR).is_dir() else str(Path.home())
+    subprocess.run(["tmux", "new-window", "-t", SESSION, "-c", work_dir])
 
 
 def select_window(index: int):
@@ -87,7 +94,7 @@ HTML = """\
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>Big Mac</title>
+<title>__TITLE__</title>
 <style>
 body { margin:0; padding:0; background:#0d1117; color:#c9d1d9;
   font-family:-apple-system,system-ui,sans-serif; }
@@ -124,8 +131,6 @@ button { background:#21262d; color:#c9d1d9; border:1px solid #30363d;
       <button onclick="key('Down')">Down</button>
       <button onclick="key('Tab')">Tab</button>
       <button onclick="key('Escape')">Esc</button>
-      <button onclick="txt('claude')">claude</button>
-      <button onclick="txt('/exit')">/exit</button>
     </div>
   </div>
   <div id="wins" class="btns" style="display:none; margin-top:6px;"></div>
@@ -241,7 +246,8 @@ if (window.visualViewport) {
 @app.get("/")
 async def index():
     ensure_session()
-    return HTMLResponse(HTML, headers={"Cache-Control": "no-store"})
+    html = HTML.replace("__TITLE__", TITLE)
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/output")
@@ -289,4 +295,9 @@ async def api_close_window(index: int):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=7681)
+    if not shutil.which("tmux"):
+        print("Error: tmux is not installed. Install it first:")
+        print("  macOS:  brew install tmux")
+        print("  Ubuntu: sudo apt install tmux")
+        sys.exit(1)
+    uvicorn.run(app, host=HOST, port=PORT)
