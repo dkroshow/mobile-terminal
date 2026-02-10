@@ -96,11 +96,12 @@ HTML = """\
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <title>__TITLE__</title>
 <style>
-body { margin:0; padding:0; background:#0d1117; color:#c9d1d9;
-  font-family:-apple-system,system-ui,sans-serif; }
+html, body { margin:0; padding:0; height:100%; background:#0d1117; color:#c9d1d9;
+  font-family:-apple-system,system-ui,sans-serif; overflow:hidden; }
 #out { padding:12px; font-family:Menlo,monospace; font-size:13px;
   line-height:1.5; white-space:pre-wrap; word-break:break-word;
-  max-height:60vh; overflow-y:auto; }
+  position:absolute; top:0; left:0; right:0; bottom:120px;
+  overflow-y:auto; }
 #bar { padding:8px 12px; background:#161b22; border-top:1px solid #30363d;
   position:fixed; bottom:0; left:0; right:0; }
 input[type=text] { width:100%; background:#0d1117; color:#c9d1d9;
@@ -140,15 +141,21 @@ const O = document.getElementById('out');
 const M = document.getElementById('msg');
 let last = '';
 
+// Only auto-scroll if user is near the bottom
+function isNearBottom() {
+  return O.scrollHeight - O.scrollTop - O.clientHeight < 50;
+}
+
 // Poll for output every second
 setInterval(async () => {
   try {
     const r = await fetch('/api/output');
     const d = await r.json();
     if (d.output !== last) {
+      const wasAtBottom = isNearBottom();
       last = d.output;
       O.textContent = d.output;
-      O.scrollTop = O.scrollHeight;
+      if (wasAtBottom) O.scrollTop = O.scrollHeight;
     }
   } catch(e) {}
 }, 1000);
@@ -157,6 +164,7 @@ async function send() {
   const t = M.value;
   if (!t) return;
   M.value = '';
+  O.scrollTop = O.scrollHeight;
   await fetch('/api/send', {
     method:'POST',
     headers:{'Content-Type':'application/json'},

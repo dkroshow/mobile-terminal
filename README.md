@@ -56,18 +56,36 @@ Example:
 TMUX_WORK_DIR=~/projects TERMINAL_TITLE="Dev Box" HOST=0.0.0.0 python server.py
 ```
 
+## Accessing from Your Phone
+
+By default the server only listens on localhost. To access it from another device, set `HOST=0.0.0.0`:
+
+```bash
+HOST=0.0.0.0 python server.py
+```
+
+**Same network (home Wi-Fi):** Open `http://<your-computer's-local-ip>:7681` on your phone. You can find your local IP with `ifconfig` (macOS/Linux) or `ip addr`.
+
+**Away from home:** You'll need a VPN like [Tailscale](https://tailscale.com) (free) to reach your machine. Install Tailscale on both your computer and phone, then use your Tailscale IP instead.
+
+```bash
+# Example: access via Tailscale IP
+http://100.x.x.x:7681
+```
+
+Alternatively, use an SSH tunnel:
+
+```bash
+ssh -L 7681:localhost:7681 user@your-server
+```
+
 ## Security
 
 This server gives full terminal access to anyone who can reach it. There is **no authentication**.
 
-- The default bind address is `127.0.0.1` (localhost only)
-- To access from other devices, set `HOST=0.0.0.0` — but only do this on a trusted network
-- For remote access, put it behind a VPN (e.g., [Tailscale](https://tailscale.com)) or an SSH tunnel:
-
-```bash
-# SSH tunnel from your phone/laptop
-ssh -L 7681:localhost:7681 user@your-server
-```
+- The default bind address is `127.0.0.1` (localhost only) — no one else can connect
+- Setting `HOST=0.0.0.0` exposes it to your network — only do this on a network you trust
+- For access over the internet, **always** use a VPN (Tailscale) or SSH tunnel — never expose the port directly
 
 ## API
 
