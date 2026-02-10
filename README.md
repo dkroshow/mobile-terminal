@@ -38,6 +38,33 @@ python server.py
 
 Open `http://localhost:7681` in your browser.
 
+## Run as a Background Service (macOS)
+
+To keep the server running permanently (auto-starts on login, restarts on crash):
+
+```bash
+./install.sh
+```
+
+This creates a macOS LaunchAgent that runs in the background. To remove it:
+
+```bash
+./uninstall.sh
+```
+
+Manage the service:
+
+```bash
+# Stop
+launchctl unload ~/Library/LaunchAgents/com.kd.mobile-terminal.plist
+
+# Start
+launchctl load ~/Library/LaunchAgents/com.kd.mobile-terminal.plist
+
+# Logs
+tail -f /tmp/mobile-terminal.log
+```
+
 ## Configuration
 
 All settings are via environment variables:
