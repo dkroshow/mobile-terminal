@@ -4,6 +4,8 @@ A minimal web UI for controlling tmux sessions from your phone or any browser. O
 
 Initiate new claude sessions on your phone. Or, initiate via the tmux window on your machine and continue them via your phone. 
 
+Requires Tailscale on machine and phone if you want to work beyond your LAN. Tailscale is a phenomenal product so good idea to get anyway.
+
 ## Features
 
 - Send commands and see output in real time (1s polling)
