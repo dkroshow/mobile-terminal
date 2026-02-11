@@ -294,6 +294,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
     <button class="pill" onclick="key('Down')">Down</button>
     <button class="pill" onclick="key('Tab')">Tab</button>
     <button class="pill" onclick="key('Escape')">Esc</button>
+    <button class="pill" onclick="prefill('/_my_wrap_up')">Wrap</button>
   </div>
 </div>
 
@@ -305,6 +306,7 @@ const bar = document.getElementById('bar');
 const topbar = document.getElementById('topbar');
 let rawMode = false, rawContent = '', last = '';
 let pendingMsg = null, pendingTime = 0;
+let awaitingResponse = false;
 
 function layout() {
   O.style.top = topbar.offsetHeight + 'px';
@@ -330,6 +332,23 @@ function isClaudeCode(text) {
   return /\\u276f/.test(text) && /\\u23fa/.test(text);
 }
 
+// --- Detect if Claude Code is idle (done processing) ---
+function isIdle(text) {
+  const lines = text.split('\\n');
+  // Walk backwards to find the last non-empty, non-separator line
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = lines[i].trim();
+    if (!t) continue;
+    if (/^[\\u2500\\u2501\\u2504\\u2508\\u2550]{3,}$/.test(t)) continue;
+    if (/^[\\u23f5]/.test(t)) continue;
+    // If we hit a bare ❯ prompt (idle), Claude is done
+    if (/^\\u276f\\s*$/.test(t)) return true;
+    // Anything else (status bar, thinking indicator, text) means not idle
+    return false;
+  }
+  return false;
+}
+
 // --- Parse Claude Code session into turns ---
 function parseCCTurns(text) {
   const lines = text.split('\\n');
@@ -345,9 +364,17 @@ function parseCCTurns(text) {
     if (/^[\\u2500\\u2501\\u2504\\u2508\\u2550]{3,}$/.test(t)) continue;
     if (/^[\\u23f5]/.test(t)) continue;
     if (/^\\u2026/.test(t)) continue;
-    if (!t) continue;
+    // Blank line: preserve as paragraph break in assistant text
+    if (!t) {
+      if (cur && cur.role === 'assistant' && !inTool) cur.lines.push('');
+      continue;
+    }
     // Status lines (✻✳✹✽ etc.) — skip but track them
     if (/^[\\u2730-\\u273f]/.test(t)) { sawStatus = true; continue; }
+    // Extended thinking indicator (· Sketching…, · Thinking…) — skip
+    if (/^\\u00b7\\s+\\w/.test(t)) { sawStatus = true; continue; }
+    // Status bar line (esc to interrupt, bypass permissions, etc.) — skip
+    if (/esc to interrupt/.test(t)) continue;
 
     // User prompt: ❯ at column 0 only (not indented examples in assistant text)
     if (/^\\u276f/.test(raw)) {
@@ -392,13 +419,9 @@ function parseCCTurns(text) {
   }
   if (cur) turns.push(cur);
   const filtered = turns.filter(t => t.lines.some(l => l.trim()));
-  // Handle last user turn: prompt/suggestion vs actual sent message
+  // Remove trailing idle prompt (❯ with ghost suggestion text, no active processing)
   if (filtered.length > 0 && filtered[filtered.length - 1].role === 'user') {
-    if (sawStatus) {
-      // Claude is actively thinking — show user message + thinking indicator
-      filtered.push({ role: 'thinking', lines: [] });
-    } else {
-      // Idle prompt (possibly with ghost suggestion text) — remove it
+    if (!sawStatus && isIdle(text)) {
       filtered.pop();
     }
   }
@@ -432,23 +455,24 @@ function renderOutput(raw) {
 
     // Check if parser caught up with our pending sent message
     if (pendingMsg) {
-      if (Date.now() - pendingTime > 15000) { pendingMsg = null; }
-      else {
-        const userTurns = turns.filter(t => t.role === 'user');
-        const lastUser = userTurns[userTurns.length - 1];
-        if (lastUser && lastUser.lines.join(' ').includes(pendingMsg.substring(0, 20))) {
-          pendingMsg = null;
-        }
+      const userTurns = turns.filter(t => t.role === 'user');
+      const lastUser = userTurns[userTurns.length - 1];
+      if (lastUser && lastUser.lines.join(' ').includes(pendingMsg.substring(0, 20))) {
+        pendingMsg = null;  // Parser has our message, stop injecting it
       }
+    }
+    // Check if Claude is done working
+    if (awaitingResponse) {
+      const elapsed = Date.now() - pendingTime;
+      // Clear when Claude is idle (bare ❯ prompt at bottom) and enough time has passed
+      if (elapsed > 3000 && isIdle(clean)) {
+        awaitingResponse = false;
+      }
+      // Safety timeout: 3 minutes
+      if (elapsed > 180000) awaitingResponse = false;
     }
 
     for (const t of turns) {
-      if (t.role === 'thinking') {
-        html += '<div class="turn assistant">'
-          + '<div class="turn-label">Claude</div>'
-          + '<div class="turn-body"><p class="thinking">Thinking\\u2026</p></div></div>';
-        continue;
-      }
       const text = t.lines.join('\\n').trim();
       if (!text) continue;
       if (t.role === 'user') {
@@ -462,14 +486,17 @@ function renderOutput(raw) {
       }
     }
 
-    // Append pending message if parser hasn't caught up yet
+    // Inject sent message if parser hasn't caught up yet
     if (pendingMsg) {
       html += '<div class="turn user">'
         + '<div class="turn-label">You</div>'
-        + '<div class="turn-body">' + esc(pendingMsg) + '</div></div>'
-        + '<div class="turn assistant">'
+        + '<div class="turn-body">' + esc(pendingMsg) + '</div></div>';
+    }
+    // Show thinking indicator while awaiting response
+    if (awaitingResponse) {
+      html += '<div class="turn assistant">'
         + '<div class="turn-label">Claude</div>'
-        + '<div class="turn-body"><p class="thinking">Thinking\\u2026</p></div></div>';
+        + '<div class="turn-body"><p class="thinking">Working\\u2026</p></div></div>';
     }
   } else {
     // Plain terminal — show as monospace
@@ -516,6 +543,7 @@ async function send() {
   M.value = '';
   pendingMsg = t;
   pendingTime = Date.now();
+  awaitingResponse = true;
   renderOutput(rawContent || last);
   O.scrollTop = O.scrollHeight;
   await fetch('/api/send', {
@@ -526,11 +554,30 @@ async function send() {
 async function key(k) { await fetch('/api/key/' + k); }
 
 // --- Keys tray ---
+// --- Prefill input (user must press Enter to send) ---
+function prefill(text) {
+  M.value = text;
+  M.focus();
+}
+
 function toggleKeys() {
   const on = document.getElementById('keys').classList.toggle('open');
   document.getElementById('keysBtn').classList.toggle('on', on);
   requestAnimationFrame(layout);
   setTimeout(layout, 300);
+}
+
+// --- Send a preset command ---
+async function sendCmd(cmd) {
+  pendingMsg = cmd;
+  pendingTime = Date.now();
+  awaitingResponse = true;
+  renderOutput(rawContent || last);
+  O.scrollTop = O.scrollHeight;
+  await fetch('/api/send', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({cmd: cmd})
+  });
 }
 
 // --- Windows ---
