@@ -127,6 +127,7 @@ button { background:#21262d; color:#c9d1d9; border:1px solid #30363d;
   </div>
   <div id="cmds" style="display:none; margin-top:6px;">
     <div class="btns">
+      <button class="send" onclick="key('Enter')">Enter</button>
       <button class="danger" onclick="key('C-c')">^C</button>
       <button onclick="key('Up')">Up</button>
       <button onclick="key('Down')">Down</button>
