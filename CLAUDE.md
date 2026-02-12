@@ -18,7 +18,10 @@ Working and deployed as a macOS LaunchAgent (`com.kd.mobile-terminal`). Runs on 
 
 ### Key Features
 - Send commands, see output (1s poll)
-- Named tmux window tabs (create/switch/close/rename via long-press)
+- Multi-pane layout (up to 3 panes, each with own tab bar and input)
+- Drag-and-drop tabs between panes
+- Sidebar with session/window nav, CC status indicators (Standby/Working/Thinking), per-window details popup
+- Named tmux window tabs (create/switch/close/rename)
 - Special keys: Ctrl-C, Up/Down, Tab, Escape, Enter
 - iOS keyboard handling (visualViewport API to keep input above keyboard)
 - Chat mode for Claude Code output (detects ❯/⏺, strips tool calls/diffs/status, renders markdown)
@@ -26,6 +29,7 @@ Working and deployed as a macOS LaunchAgent (`com.kd.mobile-terminal`). Runs on 
 - Thinking indicator (pulsing "Thinking..." while Claude processes)
 - Suggestion filtering (idle prompt ghost text hidden via sawStatus heuristic)
 - Plain terminal fallback (monospace card for non-CC sessions)
+- 4-tier text size (A-- through A+)
 
 ### API
 | Method | Endpoint | Purpose |
@@ -43,7 +47,9 @@ Working and deployed as a macOS LaunchAgent (`com.kd.mobile-terminal`). Runs on 
 | DELETE | `/api/windows/{index}` | Close window |
 | GET | `/api/sessions` | List all sessions with windows |
 | POST | `/api/sessions/{name}` | Switch to session |
+| PUT | `/api/sessions/{name}` | Rename session `{"name": "..."}` |
 | GET | `/api/pane-info` | Get cwd, PID, session, window of active pane |
+| GET | `/api/dashboard` | All sessions/windows with CC status (sidebar) |
 
 ### Config (env vars)
 - `TMUX_SESSION` — session name (default: `mobile`)
