@@ -19,6 +19,7 @@ TITLE = os.environ.get("TERMINAL_TITLE", "Mobile Terminal")
 HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "7681"))
 
+
 ANSI_RE = re.compile(
     r'\x1b\[[0-9;]*[a-zA-Z]'
     r'|\x1b\][^\x07]*\x07'
@@ -165,8 +166,8 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   font-size:13px; font-weight:500; font-family:inherit; cursor:pointer;
   transition:all .15s; -webkit-user-select:none; user-select:none; }
 #view-btn:active { transform:scale(0.96); opacity:0.8; }
-#top-title { color:var(--text2); font-size:12px; font-weight:500;
-  letter-spacing:0.3px; text-transform:uppercase; flex:1; text-align:right; }
+#tmux-btn { overflow:hidden; max-width:70vw; }
+#tmux-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 /* --- tmux panel --- */
 #tmux-panel { position:fixed; top:0; left:0; right:0; z-index:9;
@@ -291,7 +292,9 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 #msg { flex:1; background:var(--surface); color:var(--text);
   border:1px solid var(--border2); border-radius:22px; padding:11px 18px;
   font-size:16px; font-family:inherit; outline:none;
-  transition:border-color .2s, box-shadow .2s; }
+  transition:border-color .2s, box-shadow .2s;
+  resize:none; overflow-y:hidden; max-height:120px;
+  line-height:1.4; }
 #msg::placeholder { color:var(--text3); }
 #msg:focus { border-color:rgba(217,119,87,0.5);
   box-shadow:0 0 0 3px rgba(217,119,87,0.1); }
@@ -316,19 +319,68 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 #keys, #cmds { max-height:0; overflow:hidden; transition:max-height .25s ease, margin .25s ease;
   display:flex; flex-wrap:wrap; gap:6px; margin-top:0; }
 #keys.open, #cmds.open { max-height:100px; margin-top:10px; }
+
+/* Rename modal */
+#rename-overlay { display:none; position:fixed; inset:0; z-index:100;
+  background:rgba(0,0,0,0.6); align-items:center; justify-content:center; }
+#rename-overlay.open { display:flex; }
+#rename-modal { background:var(--bg2); border:1px solid var(--border2);
+  border-radius:16px; padding:20px; width:min(320px, 85vw); }
+#rename-modal h3 { font-size:15px; font-weight:600; color:var(--text);
+  margin-bottom:14px; }
+#rename-input { width:100%; background:var(--surface); color:var(--text);
+  border:1px solid var(--border2); border-radius:10px; padding:10px 14px;
+  font-size:15px; font-family:inherit; outline:none; margin-bottom:14px; }
+#rename-input:focus { border-color:rgba(217,119,87,0.5); }
+#rename-modal .modal-btns { display:flex; gap:8px; }
+#rename-modal .modal-btns button { flex:1; padding:10px; border:none;
+  border-radius:10px; font-size:14px; font-weight:500; font-family:inherit;
+  cursor:pointer; transition:opacity .15s; }
+#rename-modal .modal-btns button:active { opacity:0.7; }
+.btn-cancel { background:var(--surface); color:var(--text2); }
+.btn-save { background:var(--accent); color:#fff; }
+.btn-reset { background:transparent; color:var(--text3); font-size:13px !important;
+  margin-top:8px; padding:8px !important; border:none; cursor:pointer;
+  width:100%; text-align:center; font-family:inherit; transition:color .15s; }
+.btn-reset:active { color:var(--text); }
+
+/* Details button & popup */
+#details-btn { height:36px; padding:0 14px; border-radius:18px;
+  background:var(--surface); color:var(--text2); border:1px solid var(--border);
+  font-size:13px; font-weight:500; font-family:inherit; cursor:pointer;
+  transition:all .15s; -webkit-user-select:none; user-select:none; }
+#details-btn:active { transform:scale(0.96); opacity:0.8; }
+#details-overlay { display:none; position:fixed; inset:0; z-index:100;
+  background:rgba(0,0,0,0.6); align-items:center; justify-content:center; }
+#details-overlay.open { display:flex; }
+#details-modal { background:var(--bg2); border:1px solid var(--border2);
+  border-radius:16px; padding:20px; width:min(340px, 85vw); }
+#details-modal h3 { font-size:15px; font-weight:600; color:var(--text);
+  margin-bottom:14px; }
+.detail-row { display:flex; gap:10px; padding:10px 0;
+  border-bottom:1px solid var(--border); }
+.detail-row:last-child { border-bottom:none; }
+.detail-label { color:var(--text3); font-size:12px; font-weight:600;
+  text-transform:uppercase; letter-spacing:0.5px; min-width:70px; padding-top:1px; }
+.detail-value { color:var(--text); font-size:14px; word-break:break-all;
+  font-family:'SF Mono',ui-monospace,Menlo,monospace; }
+#details-modal .btn-cancel { width:100%; margin-top:14px; padding:10px;
+  border:none; border-radius:10px; font-size:14px; font-weight:500;
+  font-family:inherit; cursor:pointer; }
 </style>
 </head>
 <body>
 
 <div id="topbar">
   <button id="tmux-btn" onclick="toggleTmux()">
-    <span>tmux</span>
+    <span id="tmux-label">tmux</span>
     <span class="arrow">&#9660;</span>
   </button>
+  <span style="flex:1"></span>
+  <button id="details-btn" onclick="openDetails()">Details</button>
   <button id="view-btn" onclick="toggleRaw()">
-    <span id="view-label">Clean</span>
+    <span>View: </span><span id="view-label">Clean</span>
   </button>
-  <span id="top-title">__TITLE__</span>
 </div>
 <div id="tmux-panel"></div>
 
@@ -339,9 +391,9 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 
 <div id="bar">
   <div id="input-row">
-    <input id="msg" type="text" placeholder="Enter command..."
+    <textarea id="msg" rows="1" placeholder="Enter command..."
       autocorrect="off" autocapitalize="none" autocomplete="off"
-      spellcheck="false" enterkeyhint="send">
+      spellcheck="false" enterkeyhint="send"></textarea>
     <button id="send-btn" onclick="send()" aria-label="Send">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
         stroke-linecap="round" stroke-linejoin="round">
@@ -368,6 +420,26 @@ html, body { height:100%; background:var(--bg); color:var(--text);
     <button class="pill" onclick="prefill('/exit')">Exit</button>
     <button class="pill" onclick="sendResume()">Resume</button>
     <button class="pill" onclick="renameCurrentWin()">Rename</button>
+  </div>
+</div>
+
+<div id="details-overlay" onclick="if(event.target===this)closeDetails()">
+  <div id="details-modal">
+    <h3>Details</h3>
+    <div id="details-content"><p style="color:var(--text3)">Loading...</p></div>
+    <button class="btn-cancel" onclick="closeDetails()">Close</button>
+  </div>
+</div>
+
+<div id="rename-overlay" onclick="if(event.target===this)closeRename()">
+  <div id="rename-modal">
+    <h3>Rename Window</h3>
+    <input id="rename-input" type="text" autocorrect="off" autocapitalize="none" spellcheck="false">
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeRename()">Cancel</button>
+      <button class="btn-save" onclick="confirmRename()">Save</button>
+    </div>
+    <button class="btn-reset" onclick="resetWindowName()">Reset to Original Name</button>
   </div>
 </div>
 
@@ -428,7 +500,7 @@ function parseCCTurns(text) {
     const raw = line.replace(/\\u00a0/g, ' ');
     const t = raw.trim();
     // Skip noise
-    if (/^[\\u2500\\u2501\\u2504\\u2508\\u2550]{3,}$/.test(t)) continue;
+    if (/^[\\u2500\\u2501\\u2504\\u2508\\u2550]{3,}$/.test(t) && t.length > 60) continue;
     if (/^[\\u23f5]/.test(t)) continue;
     if (/^\\u2026/.test(t)) continue;
     // Blank line: preserve as paragraph break in assistant text
@@ -479,9 +551,10 @@ function parseCCTurns(text) {
     // Skip tool output lines
     if (inTool) continue;
 
-    // Continuation of assistant text only
-    if (cur && cur.role === 'assistant' && !inTool) {
-      cur.lines.push(t);
+    // Continuation of current turn text
+    if (cur && !inTool) {
+      if (cur.role === 'assistant') cur.lines.push(t);
+      else if (cur.role === 'user') cur.lines.push(t);
     }
   }
   if (cur) turns.push(cur);
@@ -501,7 +574,11 @@ function esc(s) {
 }
 
 function md(s) {
-  return typeof marked !== 'undefined' ? marked.parse(s) : '<p>' + esc(s) + '</p>';
+  if (typeof marked !== 'undefined') {
+    marked.setOptions({ breaks: true });
+    return marked.parse(s);
+  }
+  return '<p>' + esc(s) + '</p>';
 }
 
 // --- Render output ---
@@ -613,6 +690,7 @@ setInterval(async () => {
 async function send() {
   const t = M.value; if (!t) return;
   M.value = '';
+  M.style.height = 'auto';
   pendingMsg = t;
   pendingTime = Date.now();
   awaitingResponse = true;
@@ -658,14 +736,7 @@ function toggleCmds() {
   requestAnimationFrame(layout);
   setTimeout(layout, 300);
 }
-function renameCurrentWin() {
-  const name = prompt('Rename window:');
-  if (name === null || name.trim() === '') return;
-  fetch('/api/windows/current', {
-    method:'PUT', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({name: name.trim()})
-  }).then(() => loadSessions());
-}
+function renameCurrentWin() { openRename(); }
 
 // --- Send a preset command ---
 async function sendCmd(cmd) {
@@ -679,6 +750,72 @@ async function sendCmd(cmd) {
     body: JSON.stringify({cmd: cmd})
   });
 }
+
+// --- Details popup ---
+function openDetails() {
+  document.getElementById('details-overlay').classList.add('open');
+  document.getElementById('details-content').innerHTML = '<p style="color:var(--text3)">Loading...</p>';
+  fetch('/api/pane-info').then(r => r.json()).then(d => {
+    let html = '';
+    html += '<div class="detail-row"><span class="detail-label">Directory</span>'
+      + '<span class="detail-value">' + esc(d.cwd) + '</span></div>';
+    html += '<div class="detail-row"><span class="detail-label">Session</span>'
+      + '<span class="detail-value">' + esc(d.session) + '</span></div>';
+    html += '<div class="detail-row"><span class="detail-label">Window</span>'
+      + '<span class="detail-value">' + esc(d.window) + '</span></div>';
+    html += '<div class="detail-row"><span class="detail-label">PID</span>'
+      + '<span class="detail-value">' + esc(d.pid) + '</span></div>';
+    document.getElementById('details-content').innerHTML = html;
+  });
+}
+function closeDetails() {
+  document.getElementById('details-overlay').classList.remove('open');
+}
+
+// --- Window naming ---
+let _currentSession = '';
+let _currentWindows = [];
+
+function isWindowNameTaken(name) {
+  const activeWin = _currentWindows.find(w => w.active);
+  return _currentWindows.some(w => w.name === name && w !== activeWin);
+}
+
+function openRename() {
+  const activeWin = _currentWindows.find(w => w.active);
+  const input = document.getElementById('rename-input');
+  input.value = activeWin ? activeWin.name : '';
+  document.getElementById('rename-overlay').classList.add('open');
+  setTimeout(() => { input.focus(); input.select(); }, 100);
+}
+function closeRename() {
+  document.getElementById('rename-overlay').classList.remove('open');
+}
+function confirmRename() {
+  const name = document.getElementById('rename-input').value.trim();
+  if (!name) return;
+  if (isWindowNameTaken(name)) { alert('That name is already in use'); return; }
+  fetch('/api/windows/current', {
+    method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name: name})
+  }).then(() => {
+    closeRename();
+    loadSessions();
+  });
+}
+function resetWindowName() {
+  fetch('/api/windows/current/reset-name', {method:'POST'}).then(() => {
+    closeRename();
+    loadSessions();
+  });
+}
+
+document.getElementById('rename-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); confirmRename(); }
+  if (e.key === 'Escape') { e.preventDefault(); closeRename(); }
+});
+
+
 
 // --- tmux navigation ---
 let _tmuxOpen = false;
@@ -695,8 +832,17 @@ function toggleTmux() {
 async function loadSessions() {
   const r = await fetch('/api/sessions');
   const d = await r.json();
+  _currentSession = d.current;
+  // Cache current session's windows and update tmux button label
+  const curSession = d.sessions.find(s => s.name === d.current);
+  if (curSession) {
+    _currentWindows = curSession.windows;
+    const activeWin = curSession.windows.find(w => w.active);
+    const winName = activeWin ? activeWin.name : '';
+    document.getElementById('tmux-label').textContent =
+      'tmux: ' + d.current + (winName ? ' | ' + winName : '');
+  }
   const panel = document.getElementById('tmux-panel');
-  // Current session shown in panel via "active" badge
   let html = '';
   for (const s of d.sessions) {
     const isCurrent = s.name === d.current;
@@ -747,8 +893,15 @@ async function newWin() {
 }
 
 // --- Input ---
+function autoResize() {
+  M.style.height = 'auto';
+  M.style.height = Math.min(M.scrollHeight, 120) + 'px';
+  M.style.overflowY = M.scrollHeight > 120 ? 'auto' : 'hidden';
+  layout();
+}
+M.addEventListener('input', autoResize);
 M.addEventListener('keydown', e => {
-  if (e.key === 'Enter') { e.preventDefault(); send(); }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
 
 // --- iOS keyboard ---
@@ -827,6 +980,14 @@ async def api_rename_current_window(body: dict):
     return JSONResponse({"ok": True})
 
 
+@app.post("/api/windows/current/reset-name")
+async def api_reset_window_name():
+    target = _current_session
+    subprocess.run(["tmux", "set-window-option", "-t", target, "automatic-rename", "on"])
+    subprocess.run(["tmux", "set-window-option", "-t", target, "allow-rename", "on"])
+    return JSONResponse({"ok": True})
+
+
 @app.put("/api/windows/{index}")
 async def api_rename_window(index: int, body: dict):
     name = body.get("name", "").strip()
@@ -852,6 +1013,22 @@ async def api_sessions():
     })
 
 
+@app.get("/api/pane-info")
+async def api_pane_info():
+    r = subprocess.run(
+        ["tmux", "display-message", "-t", _current_session, "-p",
+         "#{pane_current_path}\n#{pane_pid}\n#{window_name}\n#{session_name}"],
+        capture_output=True, text=True,
+    )
+    parts = r.stdout.strip().split("\n")
+    return JSONResponse({
+        "cwd": parts[0] if len(parts) > 0 else "",
+        "pid": parts[1] if len(parts) > 1 else "",
+        "window": parts[2] if len(parts) > 2 else "",
+        "session": parts[3] if len(parts) > 3 else "",
+    })
+
+
 @app.post("/api/sessions/{name}")
 async def api_switch_session(name: str):
     global _current_session
@@ -861,6 +1038,8 @@ async def api_switch_session(name: str):
         return JSONResponse({"ok": False, "error": "Session not found"}, status_code=404)
     _current_session = name
     return JSONResponse({"ok": True})
+
+
 
 
 if __name__ == "__main__":
