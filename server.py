@@ -93,10 +93,14 @@ def detect_cc_status(text: str) -> tuple:
     if not is_cc:
         return False, None
     tail = '\n'.join(text.split('\n')[-10:])
-    if '\u00b7' in tail and re.search(r'\u00b7\s+\w', tail):
+    # Thinking: · at START of line (not mid-line like "· 7 files" in status bar)
+    if re.search(r'^\u00b7\s+\w', tail, re.MULTILINE):
         return True, 'thinking'
-    if 'esc to interrupt' in tail:
-        return True, 'working'
+    # Working: "esc to interrupt" on its OWN line or start of line (not inside permissions bar)
+    for line in tail.split('\n'):
+        stripped = line.strip()
+        if 'esc to interrupt' in stripped and 'permissions' not in stripped and 'shift+tab' not in stripped:
+            return True, 'working'
     return True, 'idle'
 
 
@@ -222,6 +226,7 @@ HTML = """\
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --sidebar-w: 260px;
+  --text-size: 15px; --code-size: 12.5px; --mono-size: 12.5px;
 }
 * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
 html, body { height:100%; background:var(--bg); color:var(--text);
@@ -358,7 +363,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 /* Raw mode */
 .pane-output.raw { padding:20px 16px;
   font-family:'SF Mono',ui-monospace,Menlo,Consolas,monospace;
-  font-size:13px; line-height:1.6; white-space:pre-wrap;
+  font-size:var(--mono-size); line-height:1.6; white-space:pre-wrap;
   word-break:break-word; color:#999; }
 
 /* Chat mode */
@@ -380,14 +385,14 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 /* --- User bubble --- */
 .turn.user .turn-body { background:var(--accent); color:#fff;
   padding:11px 16px; border-radius:18px 18px 4px 18px;
-  max-width:85%; margin-left:auto; font-size:15.5px;
+  max-width:85%; margin-left:auto; font-size:var(--text-size);
   line-height:1.55; word-break:break-word; }
 
 /* --- Assistant card --- */
 .turn.assistant .turn-body { background:var(--surface);
   padding:16px 18px; border-radius:4px 18px 18px 18px;
   font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;
-  font-size:16px; line-height:1.8; word-break:break-word; color:var(--text); }
+  font-size:var(--text-size); line-height:1.7; word-break:break-word; color:var(--text); }
 
 /* --- Typography inside assistant cards --- */
 .turn-body p { margin:0.5em 0; }
@@ -406,7 +411,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   border-radius:10px; padding:13px; margin:10px 0; overflow-x:auto;
   white-space:pre-wrap; word-break:break-word;
   font-family:'SF Mono',ui-monospace,Menlo,monospace;
-  font-size:13px; line-height:1.55; color:#b0b0b0; }
+  font-size:var(--code-size); line-height:1.55; color:#b0b0b0; }
 .turn-body code { background:rgba(255,255,255,0.07); padding:2px 6px;
   border-radius:5px; font-family:'SF Mono',ui-monospace,Menlo,monospace;
   font-size:0.84em; color:#ccc; }
@@ -418,7 +423,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   padding:4px 14px; color:var(--text2); }
 .turn-body a { color:var(--accent); text-decoration:none; }
 .turn-body.mono { font-family:'SF Mono',ui-monospace,Menlo,monospace;
-  font-size:13px; line-height:1.6; white-space:pre-wrap; word-break:break-word;
+  font-size:var(--mono-size); line-height:1.6; white-space:pre-wrap; word-break:break-word;
   color:#999; }
 .turn-body .thinking { color:var(--text3); font-style:italic; animation:pulse 1.5s ease-in-out infinite; }
 @keyframes pulse { 0%,100%{ opacity:.4; } 50%{ opacity:1; } }
@@ -540,6 +545,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
       <div id="tab-bar"></div>
       <button class="topbar-btn" id="split-btn" onclick="toggleSplit()">Split</button>
       <button class="topbar-btn" id="details-btn" onclick="openDetails()">Details</button>
+      <button class="topbar-btn" id="size-btn" onclick="cycleTextSize()">A</button>
       <button class="topbar-btn" id="view-btn" onclick="toggleRaw()">
         <span>View: </span><span id="view-label">Clean</span>
       </button>
@@ -628,7 +634,7 @@ function esc(s) {
 }
 function md(s) {
   if (typeof marked !== 'undefined') {
-    marked.setOptions({ breaks: true });
+    marked.setOptions({ breaks: false });
     return marked.parse(s);
   }
   return '<p>' + esc(s) + '</p>';
@@ -958,6 +964,35 @@ function toggleRaw() {
   renderOutput(state.rawContent || state.last, outputEl, state);
   outputEl.scrollTop = outputEl.scrollHeight;
 }
+
+// === Text size ===
+const TEXT_SIZES = [
+  { label: 'A-', text: '13px', code: '11px', mono: '11px' },
+  { label: 'A',  text: '15px', code: '12.5px', mono: '12.5px' },
+  { label: 'A+', text: '17px', code: '14px', mono: '14px' },
+];
+let _textSizeIdx = 1; // default medium
+function cycleTextSize() {
+  _textSizeIdx = (_textSizeIdx + 1) % TEXT_SIZES.length;
+  const s = TEXT_SIZES[_textSizeIdx];
+  document.documentElement.style.setProperty('--text-size', s.text);
+  document.documentElement.style.setProperty('--code-size', s.code);
+  document.documentElement.style.setProperty('--mono-size', s.mono);
+  document.getElementById('size-btn').textContent = s.label;
+  try { localStorage.setItem('textSize', _textSizeIdx); } catch(e) {}
+}
+// Restore saved size
+try {
+  const saved = localStorage.getItem('textSize');
+  if (saved !== null) {
+    _textSizeIdx = parseInt(saved);
+    const s = TEXT_SIZES[_textSizeIdx];
+    document.documentElement.style.setProperty('--text-size', s.text);
+    document.documentElement.style.setProperty('--code-size', s.code);
+    document.documentElement.style.setProperty('--mono-size', s.mono);
+    document.getElementById('size-btn').textContent = s.label;
+  }
+} catch(e) {}
 
 // === Send ===
 async function send() {
