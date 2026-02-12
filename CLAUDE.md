@@ -37,8 +37,13 @@ Working and deployed as a macOS LaunchAgent (`com.kd.mobile-terminal`). Runs on 
 | GET | `/api/windows` | List tmux windows |
 | POST | `/api/windows/new` | Create new window |
 | POST | `/api/windows/{index}` | Switch to window |
+| PUT | `/api/windows/current` | Rename active window `{"name": "..."}` |
+| POST | `/api/windows/current/reset-name` | Reset window to auto-naming |
 | PUT | `/api/windows/{index}` | Rename window `{"name": "..."}` |
 | DELETE | `/api/windows/{index}` | Close window |
+| GET | `/api/sessions` | List all sessions with windows |
+| POST | `/api/sessions/{name}` | Switch to session |
+| GET | `/api/pane-info` | Get cwd, PID, session, window of active pane |
 
 ### Config (env vars)
 - `TMUX_SESSION` — session name (default: `mobile`)
