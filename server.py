@@ -89,11 +89,11 @@ def get_pane_preview(session: str, window: int, lines: int = 5) -> str:
 
 def detect_cc_status(text: str, activity_age: float = None) -> tuple:
     """Detect if text is Claude Code output and its status.
-    Returns (is_cc, status): idle, working, or thinking.
+    Returns (is_cc, status, context_pct) where context_pct is int or None.
     """
     is_cc = '\u276f' in text and '\u23fa' in text
     if not is_cc:
-        return False, None
+        return False, None, None
 
     lines = text.split('\n')
 
@@ -103,9 +103,15 @@ def detect_cc_status(text: str, activity_age: float = None) -> tuple:
     #    In current CC, this appears on the same line as the permissions bar:
     #    "⏵⏵ bypass permissions on (shift+tab to cycle) · 3 files · esc to interrupt"
     has_working = False
+    context_pct = None
     for line in lines[-3:]:
-        if '\u23f5' in line and 'esc to interrupt' in line:
-            has_working = True
+        if '\u23f5' in line:
+            if 'esc to interrupt' in line:
+                has_working = True
+            # Context remaining: "Context left until auto-compact: 9%"
+            m = re.search(r'Context left[^:]*:\s*(\d+)%', line)
+            if m:
+                context_pct = int(m.group(1))
             break
 
     # 2. Thinking: · at START of any line in last 20 lines
@@ -113,21 +119,16 @@ def detect_cc_status(text: str, activity_age: float = None) -> tuple:
     has_thinking = bool(re.search(r'^\u00b7', tail, re.MULTILINE))
 
     # --- Determine status ---
-    # Note: ❯ prompt is always visible in CC TUI chrome (fixed layout),
-    # so we can't use it to distinguish idle vs working.
-    # Instead, activity_age is the primary "is something happening?" signal.
     if has_working:
         status = 'working'
     elif has_thinking:
         status = 'thinking'
     elif activity_age is not None and activity_age < 5:
-        # Terminal is actively receiving output — Claude is doing something
-        # (idle CC produces NO output, so activity_age grows quickly)
         status = 'working'
     else:
         status = 'idle'
 
-    return True, status
+    return True, status, context_pct
 
 
 def get_dashboard() -> dict:
@@ -160,7 +161,7 @@ def get_dashboard() -> dict:
             activity_age = None
         # Get preview for CC detection (20 lines for better signal coverage)
         preview = get_pane_preview(sname, int(widx), lines=20)
-        is_cc, cc_status = detect_cc_status(preview, activity_age=activity_age)
+        is_cc, cc_status, ctx_pct = detect_cc_status(preview, activity_age=activity_age)
         # Trim preview to last 5 lines for response
         preview_short = '\n'.join(preview.split('\n')[-5:])
         sessions[sname]["windows"].append({
@@ -172,6 +173,7 @@ def get_dashboard() -> dict:
             "pid": pid,
             "is_cc": is_cc,
             "cc_status": cc_status,
+            "cc_context_pct": ctx_pct,
             "preview": preview_short,
         })
     return {"sessions": list(sessions.values())}
@@ -699,25 +701,34 @@ function statusLabel(cc_status) {
 }
 function detectCCStatus(text) {
   // Quick client-side CC status detection from output text
+  // Returns {status, contextPct} or null
   if (!isClaudeCode(text)) return null;
   const lines = text.split('\\n');
-  // Check status bar (last line with ⏵) for "esc to interrupt"
+  let status = 'idle', contextPct = null;
+  // Check status bar (last line with ⏵) for "esc to interrupt" and context %
   for (let i = lines.length - 1; i >= Math.max(0, lines.length - 5); i--) {
     if (/^\\s*\\u23f5/.test(lines[i])) {
-      if (/esc to interrupt/.test(lines[i])) return 'working';
+      if (/esc to interrupt/.test(lines[i])) status = 'working';
+      const m = lines[i].match(/Context left[^:]*:\\s*(\\d+)%/);
+      if (m) contextPct = parseInt(m[1]);
       break;
     }
   }
   // Check for thinking indicator
-  if (/^\\u00b7/m.test(lines.slice(-15).join('\\n'))) return 'thinking';
-  return 'idle';
+  if (status === 'idle' && /^\\u00b7/m.test(lines.slice(-15).join('\\n'))) status = 'thinking';
+  return { status, contextPct };
 }
-function updateSidebarStatus(session, windowIndex, ccStatus) {
+function updateSidebarStatus(session, windowIndex, ccStatus, contextPct) {
   const wid = session + ':' + windowIndex;
   const dot = document.querySelector('.sb-win-dot[data-wid="' + wid + '"]');
   const lbl = document.querySelector('.sb-win-status[data-wid="' + wid + '"]');
   if (dot) { dot.className = 'sb-win-dot ' + (ccStatus || 'idle'); }
-  if (lbl) { lbl.className = 'sb-win-status ' + (ccStatus || 'idle'); lbl.textContent = statusLabel(ccStatus); }
+  if (lbl) {
+    let text = statusLabel(ccStatus);
+    if (contextPct != null) text += ' ' + contextPct + '%';
+    lbl.className = 'sb-win-status ' + (ccStatus || 'idle');
+    lbl.textContent = text;
+  }
 }
 
 // === Clean/parse (unchanged core logic) ===
@@ -1124,8 +1135,8 @@ async function pollTab(tabId) {
     const d = await r.json();
     // Update sidebar status on every poll (1s latency vs 3s dashboard)
     const clean = cleanTerminal(d.output);
-    const liveStatus = detectCCStatus(clean);
-    if (liveStatus) updateSidebarStatus(tab.session, tab.windowIndex, liveStatus);
+    const live = detectCCStatus(clean);
+    if (live) updateSidebarStatus(tab.session, tab.windowIndex, live.status, live.contextPct);
     if (d.output !== state.last) {
       state.lastOutputChange = Date.now();
       state.last = d.output; state.rawContent = d.output;
@@ -1283,7 +1294,8 @@ function renderSidebar() {
     for (const w of s.windows) {
       const hasTab = openSet.has(s.name + ':' + w.index);
       const dotClass = w.is_cc ? (w.cc_status || 'idle') : 'none';
-      const status = w.is_cc ? statusLabel(w.cc_status) : '';
+      let status = w.is_cc ? statusLabel(w.cc_status) : '';
+      if (w.cc_context_pct != null) status += ' ' + w.cc_context_pct + '%';
       const statusClass = w.is_cc ? (w.cc_status || 'idle') : '';
       const wid = esc(s.name) + ':' + w.index;
       html += '<div class="sb-win' + (hasTab ? ' has-tab' : '') + '">'
@@ -1326,7 +1338,11 @@ function openWD(session, windowIndex) {
   html += '<div class="wd-row"><span class="wd-label">CWD</span><span class="wd-value">' + esc(win.cwd) + '</span></div>';
   html += '<div class="wd-row"><span class="wd-label">PID</span><span class="wd-value">' + esc(win.pid || '') + '</span></div>';
   html += '<div class="wd-row"><span class="wd-label">Command</span><span class="wd-value">' + esc(win.command) + '</span></div>';
-  if (win.is_cc) html += '<div class="wd-row"><span class="wd-label">Status</span><span class="wd-value">' + statusLabel(win.cc_status) + '</span></div>';
+  if (win.is_cc) {
+    let ccInfo = statusLabel(win.cc_status);
+    if (win.cc_context_pct != null) ccInfo += ' \\u00b7 Context: ' + win.cc_context_pct + '%';
+    html += '<div class="wd-row"><span class="wd-label">Status</span><span class="wd-value">' + ccInfo + '</span></div>';
+  }
   document.getElementById('wd-content').innerHTML = html;
   document.getElementById('wd-rename-input').value = win.name;
   setTimeout(() => document.getElementById('wd-rename-input').focus(), 100);
