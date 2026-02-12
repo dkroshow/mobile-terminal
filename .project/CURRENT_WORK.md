@@ -1,20 +1,19 @@
 # Current Work
 
 ## Recently Completed
-- **2026-02-11**: Fixed working/thinking indicator — replaced terminal-parsing `sawStatus` with client-side `awaitingResponse` state; detects idle via bare `❯` prompt; "Working..." persists until Claude finishes
-- **2026-02-11**: Improved paragraph rendering — blank lines preserved in assistant turn parsing for proper markdown paragraph breaks
-- **2026-02-11**: Added "Wrap" button in Commands panel (prefills `/_my_wrap_up` into input field)
-- **2026-02-11**: Tab-based window management — named pill tabs, rename (long-press), close button, scrollable tab row
-- **2026-02-11**: Rewrote chat mode parser for Claude Code — proper ❯/⏺ detection, strips tool calls/diffs/status, CC vs plain terminal fallback
-- **2026-02-11**: Instant message feedback — client-side pendingMsg injection before poll catches up
-- **2026-02-11**: Added Enter button to Commands panel for mobile use
+- **2026-02-11**: tmux session navigator — dropdown panel to browse/switch all tmux sessions and windows; mutable session backend
+- **2026-02-11**: Top bar redesign — tmux button, Clean/Raw view toggle, title
+- **2026-02-11**: Commands panel — Wrap Up, Clear, Exit, Resume, Rename; Resume auto-switches to Raw view
+- **2026-02-11**: Ghost suggestion fix — isIdle() checks absence of processing signals; output staleness detection (5s)
+- **2026-02-11**: Fixed working/thinking indicator — client-side `awaitingResponse` state; detects idle via `isIdle()`
+- **2026-02-11**: Improved paragraph rendering — blank lines preserved in assistant turns
+- **2026-02-11**: Tab-based window management, chat parser rewrite, instant message feedback
 - **2026-02-10**: Added launchd LaunchAgent for always-on server
 
 ## Active Work
-- **tmux navigation redesign** — user wants a "tmux" button at top that opens a panel to see/switch between tmux sessions and windows (currently has inline tab bar for windows only)
+None
 
 ## Up Next
-- tmux session/window navigation panel (in progress)
 - Consider adding basic authentication (API key or simple auth)
 - Chat mode could show tool call summaries (collapsed details) instead of hiding them entirely
 - Consider WebSocket for lower-latency updates (currently 1s polling)

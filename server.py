@@ -14,6 +14,7 @@ import uvicorn
 app = FastAPI()
 SESSION = os.environ.get("TMUX_SESSION", "mobile")
 WORK_DIR = os.environ.get("TMUX_WORK_DIR", str(Path.home()))
+_current_session = SESSION  # Mutable — can be switched at runtime
 TITLE = os.environ.get("TERMINAL_TITLE", "Mobile Terminal")
 HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "7681"))
@@ -28,27 +29,27 @@ ANSI_RE = re.compile(
 
 
 def ensure_session():
-    r = subprocess.run(["tmux", "has-session", "-t", SESSION], capture_output=True)
+    r = subprocess.run(["tmux", "has-session", "-t", _current_session], capture_output=True)
     if r.returncode != 0:
         work_dir = WORK_DIR if Path(WORK_DIR).is_dir() else str(Path.home())
         subprocess.run([
-            "tmux", "new-session", "-d", "-s", SESSION,
+            "tmux", "new-session", "-d", "-s", _current_session,
             "-x", "80", "-y", "50", "-c", work_dir,
         ])
 
 
 def send_keys(text: str):
-    subprocess.run(["tmux", "send-keys", "-t", SESSION, "-l", text])
-    subprocess.run(["tmux", "send-keys", "-t", SESSION, "Enter"])
+    subprocess.run(["tmux", "send-keys", "-t", _current_session, "-l", text])
+    subprocess.run(["tmux", "send-keys", "-t", _current_session, "Enter"])
 
 
 def send_special(key: str):
-    subprocess.run(["tmux", "send-keys", "-t", SESSION, key])
+    subprocess.run(["tmux", "send-keys", "-t", _current_session, key])
 
 
 def get_output() -> str:
     r = subprocess.run(
-        ["tmux", "capture-pane", "-t", SESSION, "-p", "-S", "-200"],
+        ["tmux", "capture-pane", "-t", _current_session, "-p", "-S", "-200"],
         capture_output=True, text=True,
     )
     text = ANSI_RE.sub("", r.stdout)
@@ -61,9 +62,44 @@ def get_output() -> str:
     return "\n".join(lines)
 
 
+def list_sessions() -> list:
+    """List all tmux sessions with their windows."""
+    r = subprocess.run(
+        ["tmux", "list-sessions", "-F", "#{session_name} #{session_windows} #{session_attached}"],
+        capture_output=True, text=True,
+    )
+    sessions = []
+    for line in r.stdout.strip().split("\n"):
+        if not line:
+            continue
+        parts = line.split(" ", 2)
+        name = parts[0]
+        # Get windows for this session
+        wr = subprocess.run(
+            ["tmux", "list-windows", "-t", name, "-F", "#{window_index} #{window_name} #{window_active}"],
+            capture_output=True, text=True,
+        )
+        windows = []
+        for wline in wr.stdout.strip().split("\n"):
+            if not wline:
+                continue
+            wp = wline.split(" ", 2)
+            windows.append({
+                "index": int(wp[0]),
+                "name": wp[1] if len(wp) > 1 else "",
+                "active": wp[2] == "1" if len(wp) > 2 else False,
+            })
+        sessions.append({
+            "name": name,
+            "windows": windows,
+            "attached": parts[2] == "1" if len(parts) > 2 else False,
+        })
+    return sessions
+
+
 def list_windows() -> list:
     r = subprocess.run(
-        ["tmux", "list-windows", "-t", SESSION, "-F", "#{window_index} #{window_name} #{window_active}"],
+        ["tmux", "list-windows", "-t", _current_session, "-F", "#{window_index} #{window_name} #{window_active}"],
         capture_output=True, text=True,
     )
     windows = []
@@ -81,11 +117,11 @@ def list_windows() -> list:
 
 def new_window():
     work_dir = WORK_DIR if Path(WORK_DIR).is_dir() else str(Path.home())
-    subprocess.run(["tmux", "new-window", "-t", SESSION, "-c", work_dir])
+    subprocess.run(["tmux", "new-window", "-t", _current_session, "-c", work_dir])
 
 
 def select_window(index: int):
-    subprocess.run(["tmux", "select-window", "-t", f"{SESSION}:{index}"])
+    subprocess.run(["tmux", "select-window", "-t", f"{_current_session}:{index}"])
 
 
 HTML = """\
@@ -116,23 +152,48 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 #topbar { position:fixed; top:0; left:0; right:0; z-index:10;
   background:var(--bg); padding:calc(var(--safe-top) + 6px) 16px 10px;
   display:flex; align-items:center; gap:10px; }
-#win-tabs { display:flex; gap:6px; align-items:center; flex:1; overflow-x:auto;
-  scrollbar-width:none; }
-#win-tabs::-webkit-scrollbar { display:none; }
-.win-tab { flex-shrink:0; height:36px; padding:0 14px; border-radius:18px;
+#tmux-btn { height:36px; padding:0 14px; border-radius:18px;
+  background:var(--surface); color:var(--text); border:1px solid var(--border);
+  font-size:13px; font-weight:600; font-family:inherit; cursor:pointer;
+  display:flex; align-items:center; gap:6px;
+  transition:all .15s; -webkit-user-select:none; user-select:none; }
+#tmux-btn.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+#tmux-btn .arrow { font-size:10px; opacity:0.6; transition:transform .2s; }
+#tmux-btn.on .arrow { transform:rotate(180deg); }
+#view-btn { height:36px; padding:0 14px; border-radius:18px;
   background:var(--surface); color:var(--text2); border:1px solid var(--border);
   font-size:13px; font-weight:500; font-family:inherit; cursor:pointer;
-  display:flex; align-items:center; gap:6px; max-width:120px;
   transition:all .15s; -webkit-user-select:none; user-select:none; }
-.win-tab span.tab-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.win-tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
-.win-close { font-size:15px; line-height:1; color:inherit; opacity:0.5;
-  padding:0 0 0 2px; flex-shrink:0; }
-.win-close:active { opacity:1; }
-#win-add { background:none; border:none; color:var(--text3); font-size:18px;
-  padding:4px 8px; cursor:pointer; line-height:1; flex-shrink:0; }
+#view-btn:active { transform:scale(0.96); opacity:0.8; }
 #top-title { color:var(--text2); font-size:12px; font-weight:500;
-  letter-spacing:0.3px; text-transform:uppercase; }
+  letter-spacing:0.3px; text-transform:uppercase; flex:1; text-align:right; }
+
+/* --- tmux panel --- */
+#tmux-panel { position:fixed; top:0; left:0; right:0; z-index:9;
+  background:var(--bg2); border-bottom:1px solid var(--border2);
+  max-height:0; overflow:hidden; overflow-y:auto;
+  transition:max-height .25s ease, padding .25s ease;
+  padding:0 16px; }
+#tmux-panel.open { max-height:60vh; padding:10px 16px 14px;
+  padding-top:calc(var(--safe-top) + 52px); }
+.tmux-session { margin-bottom:8px; }
+.tmux-session:last-child { margin-bottom:0; }
+.tmux-session-header { display:flex; align-items:center; gap:8px; padding:8px 0 4px;
+  color:var(--text2); font-size:12px; font-weight:600; text-transform:uppercase;
+  letter-spacing:0.5px; }
+.tmux-session-header.current { color:var(--accent); }
+.tmux-session-header .badge { font-size:10px; padding:1px 6px; border-radius:8px;
+  background:var(--accent); color:#fff; font-weight:500; text-transform:none;
+  letter-spacing:0; }
+.tmux-windows { display:flex; flex-wrap:wrap; gap:6px; padding:4px 0; }
+.tmux-win { height:32px; padding:0 12px; border-radius:16px;
+  background:var(--surface); color:var(--text2); border:1px solid var(--border);
+  font-size:12px; font-weight:500; font-family:inherit; cursor:pointer;
+  display:flex; align-items:center; gap:4px;
+  transition:all .15s; -webkit-user-select:none; user-select:none; }
+.tmux-win:active { transform:scale(0.96); opacity:0.8; }
+.tmux-win.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+.tmux-win .win-idx { opacity:0.5; }
 
 /* --- Output area --- */
 #out { position:absolute; left:0; right:0; overflow-y:auto;
@@ -252,18 +313,24 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .pill.danger { color:var(--red); }
 
 /* Keys tray */
-#keys { max-height:0; overflow:hidden; transition:max-height .25s ease, margin .25s ease;
+#keys, #cmds { max-height:0; overflow:hidden; transition:max-height .25s ease, margin .25s ease;
   display:flex; flex-wrap:wrap; gap:6px; margin-top:0; }
-#keys.open { max-height:100px; margin-top:10px; }
+#keys.open, #cmds.open { max-height:100px; margin-top:10px; }
 </style>
 </head>
 <body>
 
 <div id="topbar">
-  <div id="win-tabs"></div>
+  <button id="tmux-btn" onclick="toggleTmux()">
+    <span>tmux</span>
+    <span class="arrow">&#9660;</span>
+  </button>
+  <button id="view-btn" onclick="toggleRaw()">
+    <span id="view-label">Clean</span>
+  </button>
   <span id="top-title">__TITLE__</span>
-  <button id="win-add" onclick="newWin()">+</button>
 </div>
+<div id="tmux-panel"></div>
 
 <div id="out" class="chat">
   <div class="turn assistant"><div class="turn-label">Terminal</div>
@@ -285,7 +352,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   </div>
   <div id="toolbar">
     <button class="pill" id="keysBtn" onclick="toggleKeys()">Keys</button>
-    <button class="pill" id="rawBtn" onclick="toggleRaw()">Raw</button>
+    <button class="pill" id="commandsBtn" onclick="toggleCmds()">Commands</button>
   </div>
   <div id="keys">
     <button class="pill" onclick="key('Enter')">Return</button>
@@ -294,7 +361,13 @@ html, body { height:100%; background:var(--bg); color:var(--text);
     <button class="pill" onclick="key('Down')">Down</button>
     <button class="pill" onclick="key('Tab')">Tab</button>
     <button class="pill" onclick="key('Escape')">Esc</button>
-    <button class="pill" onclick="prefill('/_my_wrap_up')">Wrap</button>
+  </div>
+  <div id="cmds">
+    <button class="pill" onclick="prefill('/_my_wrap_up')">Wrap Up</button>
+    <button class="pill" onclick="prefill('/clear')">Clear</button>
+    <button class="pill" onclick="prefill('/exit')">Exit</button>
+    <button class="pill" onclick="sendResume()">Resume</button>
+    <button class="pill" onclick="renameCurrentWin()">Rename</button>
   </div>
 </div>
 
@@ -307,6 +380,7 @@ const topbar = document.getElementById('topbar');
 let rawMode = false, rawContent = '', last = '';
 let pendingMsg = null, pendingTime = 0;
 let awaitingResponse = false;
+let lastOutputChange = 0;
 
 function layout() {
   O.style.top = topbar.offsetHeight + 'px';
@@ -334,19 +408,12 @@ function isClaudeCode(text) {
 
 // --- Detect if Claude Code is idle (done processing) ---
 function isIdle(text) {
-  const lines = text.split('\\n');
-  // Walk backwards to find the last non-empty, non-separator line
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const t = lines[i].trim();
-    if (!t) continue;
-    if (/^[\\u2500\\u2501\\u2504\\u2508\\u2550]{3,}$/.test(t)) continue;
-    if (/^[\\u23f5]/.test(t)) continue;
-    // If we hit a bare ❯ prompt (idle), Claude is done
-    if (/^\\u276f\\s*$/.test(t)) return true;
-    // Anything else (status bar, thinking indicator, text) means not idle
-    return false;
-  }
-  return false;
+  const tail = text.split('\\n').slice(-10).join('\\n');
+  // If there are active processing signals, not idle
+  if (/esc to interrupt/.test(tail)) return false;
+  if (/^\\u00b7\\s+\\w/m.test(tail)) return false;
+  // No processing signals — Claude is idle
+  return true;
 }
 
 // --- Parse Claude Code session into turns ---
@@ -464,8 +531,12 @@ function renderOutput(raw) {
     // Check if Claude is done working
     if (awaitingResponse) {
       const elapsed = Date.now() - pendingTime;
-      // Clear when Claude is idle (bare ❯ prompt at bottom) and enough time has passed
+      // Clear when Claude is idle and enough time has passed
       if (elapsed > 3000 && isIdle(clean)) {
+        awaitingResponse = false;
+      }
+      // Clear when output hasn't changed for 5s (waiting for user input, e.g. menu)
+      if (elapsed > 3000 && lastOutputChange > 0 && (Date.now() - lastOutputChange) > 5000) {
         awaitingResponse = false;
       }
       // Safety timeout: 3 minutes
@@ -518,7 +589,7 @@ function renderOutput(raw) {
 
 function toggleRaw() {
   rawMode = !rawMode;
-  document.getElementById('rawBtn').classList.toggle('on', rawMode);
+  document.getElementById('view-label').textContent = rawMode ? 'Raw' : 'Clean';
   renderOutput(rawContent || last);
   O.scrollTop = O.scrollHeight;
 }
@@ -529,6 +600,7 @@ setInterval(async () => {
     const r = await fetch('/api/output');
     const d = await r.json();
     if (d.output !== last) {
+      lastOutputChange = Date.now();
       const atBottom = isNearBottom();
       last = d.output; rawContent = d.output;
       renderOutput(d.output);
@@ -560,11 +632,39 @@ function prefill(text) {
   M.focus();
 }
 
+async function sendResume() {
+  // Switch to raw view so user can see the interactive menu
+  if (!rawMode) {
+    rawMode = true;
+    document.getElementById('view-label').textContent = 'Raw';
+  }
+  await fetch('/api/send', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({cmd: '/resume'})
+  });
+}
+
 function toggleKeys() {
   const on = document.getElementById('keys').classList.toggle('open');
   document.getElementById('keysBtn').classList.toggle('on', on);
+  if (on) { document.getElementById('cmds').classList.remove('open'); document.getElementById('commandsBtn').classList.remove('on'); }
   requestAnimationFrame(layout);
   setTimeout(layout, 300);
+}
+function toggleCmds() {
+  const on = document.getElementById('cmds').classList.toggle('open');
+  document.getElementById('commandsBtn').classList.toggle('on', on);
+  if (on) { document.getElementById('keys').classList.remove('open'); document.getElementById('keysBtn').classList.remove('on'); }
+  requestAnimationFrame(layout);
+  setTimeout(layout, 300);
+}
+function renameCurrentWin() {
+  const name = prompt('Rename window:');
+  if (name === null || name.trim() === '') return;
+  fetch('/api/windows/current', {
+    method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name: name.trim()})
+  }).then(() => loadSessions());
 }
 
 // --- Send a preset command ---
@@ -580,70 +680,61 @@ async function sendCmd(cmd) {
   });
 }
 
-// --- Windows ---
-let _winCount = 0;
-async function loadWindows() {
-  const r = await fetch('/api/windows');
-  const d = await r.json();
-  _winCount = d.windows.length;
-  const container = document.getElementById('win-tabs');
-  container.innerHTML = d.windows.map(w => {
-    const cls = 'win-tab' + (w.active ? ' active' : '');
-    const close = d.windows.length > 1
-      ? '<span class="win-close" onclick="event.stopPropagation();closeWin(' + w.index + ')">\\u00d7</span>'
-      : '';
-    return '<button class="' + cls + '" data-index="' + w.index + '" data-name="' + esc(w.name) + '">'
-      + '<span class="tab-name">' + esc(w.index + ': ' + w.name) + '</span>' + close + '</button>';
-  }).join('');
-  // Attach tap + long-press listeners
-  container.querySelectorAll('.win-tab').forEach(btn => {
-    let timer = null, didLong = false, hadTouch = false;
-    btn.addEventListener('touchstart', e => {
-      hadTouch = true; didLong = false;
-      timer = setTimeout(() => {
-        didLong = true;
-        renameWin(parseInt(btn.dataset.index), btn.dataset.name);
-      }, 500);
-    }, {passive:true});
-    btn.addEventListener('touchend', e => {
-      clearTimeout(timer);
-      if (!didLong) switchWin(parseInt(btn.dataset.index));
-    });
-    btn.addEventListener('touchmove', () => clearTimeout(timer), {passive:true});
-    // Desktop click (skip if touch device already handled it)
-    btn.addEventListener('click', e => {
-      if (hadTouch) return;
-      if (e.target.classList.contains('win-close')) return;
-      switchWin(parseInt(btn.dataset.index));
-    });
-  });
-  // Scroll active tab into view
-  const active = container.querySelector('.win-tab.active');
-  if (active) active.scrollIntoView({inline:'center', block:'nearest', behavior:'smooth'});
+// --- tmux navigation ---
+let _tmuxOpen = false;
+
+function toggleTmux() {
+  _tmuxOpen = !_tmuxOpen;
+  document.getElementById('tmux-btn').classList.toggle('on', _tmuxOpen);
+  document.getElementById('tmux-panel').classList.toggle('open', _tmuxOpen);
+  if (_tmuxOpen) loadSessions();
   requestAnimationFrame(layout);
+  setTimeout(layout, 300);
 }
-async function switchWin(i) {
-  await fetch('/api/windows/' + i, {method:'POST'});
-  last = ''; loadWindows();
+
+async function loadSessions() {
+  const r = await fetch('/api/sessions');
+  const d = await r.json();
+  const panel = document.getElementById('tmux-panel');
+  // Current session shown in panel via "active" badge
+  let html = '';
+  for (const s of d.sessions) {
+    const isCurrent = s.name === d.current;
+    html += '<div class="tmux-session">';
+    html += '<div class="tmux-session-header' + (isCurrent ? ' current' : '') + '">'
+      + esc(s.name)
+      + (isCurrent ? ' <span class="badge">active</span>' : '')
+      + '</div>';
+    html += '<div class="tmux-windows">';
+    for (const w of s.windows) {
+      const active = isCurrent && w.active;
+      html += '<button class="tmux-win' + (active ? ' active' : '') + '"'
+        + ' onclick="switchSession(\\'' + esc(s.name) + '\\', ' + w.index + ')">'
+        + '<span class="win-idx">' + w.index + ':</span> ' + esc(w.name)
+        + '</button>';
+    }
+    if (isCurrent) {
+      html += '<button class="tmux-win" onclick="newWin()"'
+        + ' style="color:var(--text3);border-style:dashed">+ new</button>';
+    }
+    html += '</div></div>';
+  }
+  panel.innerHTML = html;
 }
+
+async function switchSession(name, winIndex) {
+  await fetch('/api/sessions/' + encodeURIComponent(name), {method:'POST'});
+  if (winIndex !== undefined) {
+    await fetch('/api/windows/' + winIndex, {method:'POST'});
+  }
+  last = '';
+  toggleTmux();
+  loadSessions();
+}
+
 async function newWin() {
   await fetch('/api/windows/new', {method:'POST'});
-  last = ''; loadWindows();
-}
-async function closeWin(i) {
-  if (_winCount <= 1) return;
-  if (!confirm('Close window ' + i + '?')) return;
-  await fetch('/api/windows/' + i, {method:'DELETE'});
-  last = ''; loadWindows();
-}
-async function renameWin(i, currentName) {
-  const name = prompt('Rename window:', currentName);
-  if (name === null || name.trim() === '') return;
-  await fetch('/api/windows/' + i, {
-    method:'PUT', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({name: name.trim()})
-  });
-  loadWindows();
+  last = ''; loadSessions();
 }
 
 // --- Input ---
@@ -662,7 +753,7 @@ if (window.visualViewport) {
 }
 
 // --- Init ---
-loadWindows();
+loadSessions();
 requestAnimationFrame(layout);
 new ResizeObserver(layout).observe(bar);
 new ResizeObserver(layout).observe(topbar);
@@ -716,11 +807,22 @@ async def api_select_window(index: int):
     return JSONResponse({"ok": True})
 
 
+@app.put("/api/windows/current")
+async def api_rename_current_window(body: dict):
+    name = body.get("name", "").strip()
+    if name:
+        target = _current_session
+        subprocess.run(["tmux", "rename-window", "-t", target, name])
+        subprocess.run(["tmux", "set-window-option", "-t", target, "allow-rename", "off"])
+        subprocess.run(["tmux", "set-window-option", "-t", target, "automatic-rename", "off"])
+    return JSONResponse({"ok": True})
+
+
 @app.put("/api/windows/{index}")
 async def api_rename_window(index: int, body: dict):
     name = body.get("name", "").strip()
     if name:
-        target = f"{SESSION}:{index}"
+        target = f"{_current_session}:{index}"
         subprocess.run(["tmux", "rename-window", "-t", target, name])
         subprocess.run(["tmux", "set-window-option", "-t", target, "allow-rename", "off"])
         subprocess.run(["tmux", "set-window-option", "-t", target, "automatic-rename", "off"])
@@ -729,7 +831,26 @@ async def api_rename_window(index: int, body: dict):
 
 @app.delete("/api/windows/{index}")
 async def api_close_window(index: int):
-    subprocess.run(["tmux", "kill-window", "-t", f"{SESSION}:{index}"])
+    subprocess.run(["tmux", "kill-window", "-t", f"{_current_session}:{index}"])
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/sessions")
+async def api_sessions():
+    return JSONResponse({
+        "current": _current_session,
+        "sessions": list_sessions(),
+    })
+
+
+@app.post("/api/sessions/{name}")
+async def api_switch_session(name: str):
+    global _current_session
+    # Verify session exists
+    r = subprocess.run(["tmux", "has-session", "-t", name], capture_output=True)
+    if r.returncode != 0:
+        return JSONResponse({"ok": False, "error": "Session not found"}, status_code=404)
+    _current_session = name
     return JSONResponse({"ok": True})
 
 
