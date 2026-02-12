@@ -628,7 +628,7 @@ async function key(k) { await fetch('/api/key/' + k); }
 // --- Keys tray ---
 // --- Prefill input (user must press Enter to send) ---
 function prefill(text) {
-  M.value = text;
+  M.value = M.value ? M.value + ' ' + text : text;
   M.focus();
 }
 
@@ -727,9 +727,18 @@ async function switchSession(name, winIndex) {
   if (winIndex !== undefined) {
     await fetch('/api/windows/' + winIndex, {method:'POST'});
   }
-  last = '';
+  // Clear stale data and fetch new session output immediately
+  last = ''; rawContent = '';
+  pendingMsg = null; awaitingResponse = false;
   toggleTmux();
   loadSessions();
+  try {
+    const r = await fetch('/api/output');
+    const d = await r.json();
+    last = d.output; rawContent = d.output;
+    renderOutput(d.output);
+    O.scrollTop = O.scrollHeight;
+  } catch(e) {}
 }
 
 async function newWin() {

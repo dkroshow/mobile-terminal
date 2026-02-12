@@ -1,6 +1,7 @@
 # Current Work
 
 ## Recently Completed
+- **2026-02-11**: Prefill appends to existing input; session switch clears stale output and fetches immediately
 - **2026-02-11**: tmux session navigator — dropdown panel to browse/switch all tmux sessions and windows; mutable session backend
 - **2026-02-11**: Top bar redesign — tmux button, Clean/Raw view toggle, title
 - **2026-02-11**: Commands panel — Wrap Up, Clear, Exit, Resume, Rename; Resume auto-switches to Raw view
