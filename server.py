@@ -39,18 +39,29 @@ def ensure_session():
         ])
 
 
-def send_keys(text: str):
-    subprocess.run(["tmux", "send-keys", "-t", _current_session, "-l", text])
-    subprocess.run(["tmux", "send-keys", "-t", _current_session, "Enter"])
+def _tmux_target(session=None, window=None):
+    """Build a tmux target string like 'session:window' or just 'session'."""
+    s = session or _current_session
+    if window is not None:
+        return f"{s}:{window}"
+    return s
 
 
-def send_special(key: str):
-    subprocess.run(["tmux", "send-keys", "-t", _current_session, key])
+def send_keys(text: str, session=None, window=None):
+    target = _tmux_target(session, window)
+    subprocess.run(["tmux", "send-keys", "-t", target, "-l", text])
+    subprocess.run(["tmux", "send-keys", "-t", target, "Enter"])
 
 
-def get_output() -> str:
+def send_special(key: str, session=None, window=None):
+    target = _tmux_target(session, window)
+    subprocess.run(["tmux", "send-keys", "-t", target, key])
+
+
+def get_output(session=None, window=None) -> str:
+    target = _tmux_target(session, window)
     r = subprocess.run(
-        ["tmux", "capture-pane", "-t", _current_session, "-p", "-S", "-200"],
+        ["tmux", "capture-pane", "-t", target, "-p", "-S", "-200"],
         capture_output=True, text=True,
     )
     text = ANSI_RE.sub("", r.stdout)
@@ -61,6 +72,72 @@ def get_output() -> str:
     while lines and not lines[-1].strip():
         lines.pop()
     return "\n".join(lines)
+
+
+def get_pane_preview(session: str, window: int, lines: int = 5) -> str:
+    """Capture last N lines from a specific pane for preview."""
+    target = f"{session}:{window}"
+    r = subprocess.run(
+        ["tmux", "capture-pane", "-t", target, "-p", "-S", f"-{lines}"],
+        capture_output=True, text=True,
+    )
+    text = ANSI_RE.sub("", r.stdout)
+    text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]', '', text)
+    return text.strip()
+
+
+def detect_cc_status(text: str) -> tuple:
+    """Detect if text is Claude Code output and its status.
+    Returns (is_cc, status) where status is 'idle', 'working', or 'thinking'."""
+    is_cc = '\u276f' in text and '\u23fa' in text
+    if not is_cc:
+        return False, None
+    tail = '\n'.join(text.split('\n')[-10:])
+    if '\u00b7' in tail and re.search(r'\u00b7\s+\w', tail):
+        return True, 'thinking'
+    if 'esc to interrupt' in tail:
+        return True, 'working'
+    return True, 'idle'
+
+
+def get_dashboard() -> dict:
+    """Get lightweight status for all sessions and windows."""
+    # Single call to get all pane metadata
+    r = subprocess.run(
+        ["tmux", "list-panes", "-a", "-F",
+         "#{session_name}\t#{window_index}\t#{window_name}\t#{pane_current_path}\t#{pane_current_command}\t#{window_active}\t#{session_attached}"],
+        capture_output=True, text=True,
+    )
+    sessions = {}
+    for line in r.stdout.strip().split("\n"):
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) < 7:
+            continue
+        sname, widx, wname, cwd, cmd, wactive, sattached = parts
+        if sname not in sessions:
+            sessions[sname] = {
+                "name": sname,
+                "attached": sattached == "1",
+                "windows": [],
+            }
+        # Get preview for CC detection
+        preview = get_pane_preview(sname, int(widx), lines=10)
+        is_cc, cc_status = detect_cc_status(preview)
+        # Trim preview to last 5 lines for response
+        preview_short = '\n'.join(preview.split('\n')[-5:])
+        sessions[sname]["windows"].append({
+            "index": int(widx),
+            "name": wname,
+            "active": wactive == "1",
+            "cwd": cwd,
+            "command": cmd,
+            "is_cc": is_cc,
+            "cc_status": cc_status,
+            "preview": preview_short,
+        })
+    return {"sessions": list(sessions.values())}
 
 
 def list_sessions() -> list:
@@ -141,73 +218,151 @@ HTML = """\
   --border: rgba(255,255,255,0.07); --border2: rgba(255,255,255,0.12);
   --text: #e8e6e3; --text2: #8a8a8a; --text3: #5a5a5a;
   --accent: #D97757; --accent2: #c4693e; --red: #e5534b;
+  --green: #3fb950; --orange: #d29922;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --sidebar-w: 260px;
 }
 * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
 html, body { height:100%; background:var(--bg); color:var(--text);
   font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;
   overflow:hidden; -webkit-font-smoothing:antialiased; }
 
-/* --- Top bar --- */
-#topbar { position:fixed; top:0; left:0; right:0; z-index:10;
-  background:var(--bg); padding:calc(var(--safe-top) + 6px) 16px 10px;
-  display:flex; align-items:center; gap:10px; }
-#tmux-btn { height:36px; padding:0 14px; border-radius:18px;
-  background:var(--surface); color:var(--text); border:1px solid var(--border);
-  font-size:13px; font-weight:600; font-family:inherit; cursor:pointer;
-  display:flex; align-items:center; gap:6px;
-  transition:all .15s; -webkit-user-select:none; user-select:none; }
-#tmux-btn.on { background:var(--accent); color:#fff; border-color:var(--accent); }
-#tmux-btn .arrow { font-size:10px; opacity:0.6; transition:transform .2s; }
-#tmux-btn.on .arrow { transform:rotate(180deg); }
-#view-btn { height:36px; padding:0 14px; border-radius:18px;
-  background:var(--surface); color:var(--text2); border:1px solid var(--border);
-  font-size:13px; font-weight:500; font-family:inherit; cursor:pointer;
-  transition:all .15s; -webkit-user-select:none; user-select:none; }
-#view-btn:active { transform:scale(0.96); opacity:0.8; }
-#tmux-btn { overflow:hidden; max-width:70vw; }
-#tmux-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* --- App layout --- */
+#app { display:flex; height:100%; }
 
-/* --- tmux panel --- */
-#tmux-panel { position:fixed; top:0; left:0; right:0; z-index:9;
-  background:var(--bg2); border-bottom:1px solid var(--border2);
-  max-height:0; overflow:hidden; overflow-y:auto;
-  transition:max-height .25s ease, padding .25s ease;
-  padding:0 16px; }
-#tmux-panel.open { max-height:60vh; padding:10px 16px 14px;
-  padding-top:calc(var(--safe-top) + 52px); }
-.tmux-session { margin-bottom:8px; }
-.tmux-session:last-child { margin-bottom:0; }
-.tmux-session-header { display:flex; align-items:center; gap:8px; padding:8px 0 4px;
-  color:var(--text2); font-size:12px; font-weight:600; text-transform:uppercase;
+/* --- Sidebar --- */
+#sidebar { width:var(--sidebar-w); min-width:0; background:var(--bg2);
+  border-right:1px solid var(--border2); display:flex; flex-direction:column;
+  transition:width .2s ease, min-width .2s ease; overflow:hidden;
+  padding-top:var(--safe-top); }
+#sidebar.collapsed { width:0; min-width:0; border-right:none; }
+#sidebar-header { padding:12px 14px 8px; display:flex; align-items:center;
+  justify-content:space-between; flex-shrink:0; }
+#sidebar-header h2 { font-size:13px; font-weight:700; color:var(--text2);
+  text-transform:uppercase; letter-spacing:0.5px; }
+#collapse-btn { background:none; border:none; color:var(--text3); cursor:pointer;
+  font-size:16px; padding:4px 6px; border-radius:6px; transition:all .15s; }
+#collapse-btn:hover { color:var(--text); background:var(--surface); }
+#sidebar-content { flex:1; overflow-y:auto; padding:0 8px 8px;
+  -webkit-overflow-scrolling:touch; }
+#sidebar-footer { padding:8px; flex-shrink:0; border-top:1px solid var(--border); }
+#new-win-btn { width:100%; padding:8px; background:var(--surface);
+  color:var(--text3); border:1px dashed var(--border2); border-radius:8px;
+  font-size:12px; font-weight:500; font-family:inherit; cursor:pointer;
+  transition:all .15s; }
+#new-win-btn:hover { color:var(--text); border-color:var(--text3); }
+
+/* Sidebar session groups */
+.sb-session { margin-bottom:4px; }
+.sb-session-header { display:flex; align-items:center; gap:6px; padding:8px 8px 4px;
+  color:var(--text3); font-size:11px; font-weight:700; text-transform:uppercase;
   letter-spacing:0.5px; }
-.tmux-session-header.current { color:var(--accent); }
-.tmux-session-header .badge { font-size:10px; padding:1px 6px; border-radius:8px;
+.sb-session-header .sb-badge { font-size:9px; padding:1px 5px; border-radius:6px;
   background:var(--accent); color:#fff; font-weight:500; text-transform:none;
   letter-spacing:0; }
-.tmux-windows { display:flex; flex-wrap:wrap; gap:6px; padding:4px 0; }
-.tmux-win { height:32px; padding:0 12px; border-radius:16px;
+.sb-win { display:flex; align-items:center; gap:8px; padding:7px 10px;
+  border-radius:8px; cursor:pointer; transition:all .12s;
+  -webkit-user-select:none; user-select:none; }
+.sb-win:hover { background:var(--surface); }
+.sb-win.has-tab { background:rgba(217,119,87,0.08); }
+.sb-win.has-tab:hover { background:rgba(217,119,87,0.15); }
+.sb-win-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.sb-win-dot.idle { background:var(--green); }
+.sb-win-dot.working { background:var(--orange); animation:pulse 1.5s ease-in-out infinite; }
+.sb-win-dot.thinking { background:var(--orange); animation:pulse 1s ease-in-out infinite; }
+.sb-win-dot.none { background:var(--text3); opacity:0.3; }
+.sb-win-info { flex:1; min-width:0; }
+.sb-win-name { font-size:13px; font-weight:500; color:var(--text);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sb-win-cwd { font-size:11px; color:var(--text3);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* Mobile sidebar */
+#sidebar-backdrop { display:none; position:fixed; inset:0; z-index:19;
+  background:rgba(0,0,0,0.5); opacity:0; transition:opacity .2s; }
+#sidebar-backdrop.open { opacity:1; }
+
+@media (max-width:768px) {
+  #sidebar { position:fixed; left:0; top:0; bottom:0; z-index:20;
+    transform:translateX(-100%); transition:transform .25s ease;
+    width:280px; }
+  #sidebar.open { transform:translateX(0); }
+  #sidebar.collapsed { transform:translateX(-100%); }
+  #sidebar-backdrop.open { display:block; }
+  #split-btn { display:none !important; }
+}
+
+/* --- Main area --- */
+#main { flex:1; display:flex; flex-direction:column; min-width:0;
+  position:relative; }
+
+/* --- Top bar --- */
+#topbar { background:var(--bg); padding:calc(var(--safe-top) + 6px) 12px 0;
+  display:flex; flex-direction:column; gap:0; flex-shrink:0; z-index:10; }
+#topbar-row { display:flex; align-items:center; gap:8px; padding-bottom:8px; }
+#hamburger { display:none; background:none; border:none; color:var(--text2);
+  font-size:20px; cursor:pointer; padding:4px 8px; border-radius:8px;
+  transition:all .15s; flex-shrink:0; }
+#hamburger:active { transform:scale(0.92); }
+@media (max-width:768px) { #hamburger { display:block; } }
+.topbar-btn { height:32px; padding:0 12px; border-radius:16px;
   background:var(--surface); color:var(--text2); border:1px solid var(--border);
   font-size:12px; font-weight:500; font-family:inherit; cursor:pointer;
-  display:flex; align-items:center; gap:4px;
-  transition:all .15s; -webkit-user-select:none; user-select:none; }
-.tmux-win:active { transform:scale(0.96); opacity:0.8; }
-.tmux-win.active { background:var(--accent); color:#fff; border-color:var(--accent); }
-.tmux-win .win-idx { opacity:0.5; }
+  transition:all .15s; -webkit-user-select:none; user-select:none;
+  flex-shrink:0; white-space:nowrap; }
+.topbar-btn:active { transform:scale(0.96); opacity:0.8; }
 
-/* --- Output area --- */
-#out { position:absolute; left:0; right:0; overflow-y:auto;
-  -webkit-overflow-scrolling:touch; }
+/* --- Tab bar --- */
+#tab-bar { display:flex; align-items:center; gap:6px; flex:1; min-width:0;
+  overflow-x:auto; -webkit-overflow-scrolling:touch;
+  scrollbar-width:none; -ms-overflow-style:none; }
+#tab-bar::-webkit-scrollbar { display:none; }
+.tab { display:flex; align-items:center; gap:5px; padding:0 10px; height:30px;
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:8px 8px 0 0; font-size:12px; font-weight:500;
+  color:var(--text2); cursor:pointer; transition:all .12s;
+  white-space:nowrap; flex-shrink:0; max-width:180px;
+  -webkit-user-select:none; user-select:none; position:relative; }
+.tab:hover { color:var(--text); }
+.tab.active { background:var(--bg); color:var(--text); border-bottom-color:var(--bg); }
+.tab-name { overflow:hidden; text-overflow:ellipsis; }
+.tab-close { display:flex; align-items:center; justify-content:center;
+  width:16px; height:16px; border-radius:4px; font-size:14px; line-height:1;
+  color:var(--text3); cursor:pointer; transition:all .1s; }
+.tab-close:hover { background:rgba(255,255,255,0.1); color:var(--text); }
+#split-btn { flex-shrink:0; }
+#split-btn.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+
+/* --- Panes container --- */
+#panes-container { flex:1; display:flex; overflow:hidden; position:relative; }
+.tab-pane { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch;
+  display:none; flex-direction:column; min-width:0; }
+.tab-pane.visible { display:flex; }
+
+/* Split pane headers */
+.pane-header { display:none; padding:4px 10px; background:var(--bg2);
+  border-bottom:1px solid var(--border); font-size:11px; font-weight:600;
+  color:var(--text3); text-transform:uppercase; letter-spacing:0.3px;
+  cursor:pointer; flex-shrink:0; }
+.split-mode .pane-header { display:flex; align-items:center; justify-content:space-between; }
+.tab-pane.focused .pane-header { border-top:2px solid var(--accent); color:var(--accent); }
+
+/* Split layout */
+.split-mode .tab-pane.visible { border-right:1px solid var(--border2); }
+.split-mode .tab-pane.visible:last-child { border-right:none; }
+
+/* Pane output area */
+.pane-output { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; }
 
 /* Raw mode */
-#out.raw { padding:20px 16px;
+.pane-output.raw { padding:20px 16px;
   font-family:'SF Mono',ui-monospace,Menlo,Consolas,monospace;
   font-size:13px; line-height:1.6; white-space:pre-wrap;
   word-break:break-word; color:#999; }
 
-/* Chat mode — always the default */
-#out.chat { display:flex; flex-direction:column; padding:12px 16px 24px; }
+/* Chat mode */
+.pane-output.chat { display:flex; flex-direction:column; padding:12px 16px 24px; }
 
 /* --- Turn wrapper --- */
 .turn { margin:0 0 6px; }
@@ -284,8 +439,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .turn-body details summary::-webkit-details-marker { display:none; }
 
 /* --- Bottom bar --- */
-#bar { position:fixed; left:0; right:0; bottom:0; z-index:10;
-  background:var(--bg2);
+#bar { background:var(--bg2); flex-shrink:0;
   padding:12px 14px calc(var(--safe-bottom) + 12px);
   transition:bottom .1s; }
 #input-row { display:flex; gap:10px; align-items:flex-end; }
@@ -344,12 +498,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   width:100%; text-align:center; font-family:inherit; transition:color .15s; }
 .btn-reset:active { color:var(--text); }
 
-/* Details button & popup */
-#details-btn { height:36px; padding:0 14px; border-radius:18px;
-  background:var(--surface); color:var(--text2); border:1px solid var(--border);
-  font-size:13px; font-weight:500; font-family:inherit; cursor:pointer;
-  transition:all .15s; -webkit-user-select:none; user-select:none; }
-#details-btn:active { transform:scale(0.96); opacity:0.8; }
+/* Details popup */
 #details-overlay { display:none; position:fixed; inset:0; z-index:100;
   background:rgba(0,0,0,0.6); align-items:center; justify-content:center; }
 #details-overlay.open { display:flex; }
@@ -371,56 +520,68 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 </head>
 <body>
 
-<div id="topbar">
-  <button id="tmux-btn" onclick="toggleTmux()">
-    <span id="tmux-label">tmux</span>
-    <span class="arrow">&#9660;</span>
-  </button>
-  <span style="flex:1"></span>
-  <button id="details-btn" onclick="openDetails()">Details</button>
-  <button id="view-btn" onclick="toggleRaw()">
-    <span>View: </span><span id="view-label">Clean</span>
-  </button>
-</div>
-<div id="tmux-panel"></div>
+<div id="app">
+<aside id="sidebar">
+  <div id="sidebar-header">
+    <h2>Sessions</h2>
+    <button id="collapse-btn" onclick="toggleSidebar()" title="Collapse sidebar">&laquo;</button>
+  </div>
+  <div id="sidebar-content"></div>
+  <div id="sidebar-footer">
+    <button id="new-win-btn" onclick="newWin()">+ New Window</button>
+  </div>
+</aside>
+<div id="sidebar-backdrop" onclick="closeMobileSidebar()"></div>
 
-<div id="out" class="chat">
-  <div class="turn assistant"><div class="turn-label">Terminal</div>
-  <div class="turn-body"><p style="color:var(--text3)">Connecting...</p></div></div>
-</div>
+<main id="main">
+  <div id="topbar">
+    <div id="topbar-row">
+      <button id="hamburger" onclick="openMobileSidebar()">&#9776;</button>
+      <div id="tab-bar"></div>
+      <button class="topbar-btn" id="split-btn" onclick="toggleSplit()">Split</button>
+      <button class="topbar-btn" id="details-btn" onclick="openDetails()">Details</button>
+      <button class="topbar-btn" id="view-btn" onclick="toggleRaw()">
+        <span>View: </span><span id="view-label">Clean</span>
+      </button>
+    </div>
+  </div>
 
-<div id="bar">
-  <div id="input-row">
-    <textarea id="msg" rows="1" placeholder="Enter command..."
-      autocorrect="off" autocapitalize="none" autocomplete="off"
-      spellcheck="false" enterkeyhint="send"></textarea>
-    <button id="send-btn" onclick="send()" aria-label="Send">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
-        stroke-linecap="round" stroke-linejoin="round">
-        <line x1="12" y1="19" x2="12" y2="5"></line>
-        <polyline points="5 12 12 5 19 12"></polyline>
-      </svg>
-    </button>
+  <div id="panes-container"></div>
+
+  <div id="bar">
+    <div id="input-row">
+      <textarea id="msg" rows="1" placeholder="Enter command..."
+        autocorrect="off" autocapitalize="none" autocomplete="off"
+        spellcheck="false" enterkeyhint="send"></textarea>
+      <button id="send-btn" onclick="send()" aria-label="Send">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+          stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="19" x2="12" y2="5"></line>
+          <polyline points="5 12 12 5 19 12"></polyline>
+        </svg>
+      </button>
+    </div>
+    <div id="toolbar">
+      <button class="pill" id="keysBtn" onclick="toggleKeys()">Keys</button>
+      <button class="pill" id="commandsBtn" onclick="toggleCmds()">Commands</button>
+    </div>
+    <div id="keys">
+      <button class="pill" onclick="key('Enter')">Return</button>
+      <button class="pill danger" onclick="key('C-c')">Ctrl-C</button>
+      <button class="pill" onclick="key('Up')">Up</button>
+      <button class="pill" onclick="key('Down')">Down</button>
+      <button class="pill" onclick="key('Tab')">Tab</button>
+      <button class="pill" onclick="key('Escape')">Esc</button>
+    </div>
+    <div id="cmds">
+      <button class="pill" onclick="prefill('/_my_wrap_up')">Wrap Up</button>
+      <button class="pill" onclick="prefill('/clear')">Clear</button>
+      <button class="pill" onclick="prefill('/exit')">Exit</button>
+      <button class="pill" onclick="sendResume()">Resume</button>
+      <button class="pill" onclick="renameCurrentWin()">Rename</button>
+    </div>
   </div>
-  <div id="toolbar">
-    <button class="pill" id="keysBtn" onclick="toggleKeys()">Keys</button>
-    <button class="pill" id="commandsBtn" onclick="toggleCmds()">Commands</button>
-  </div>
-  <div id="keys">
-    <button class="pill" onclick="key('Enter')">Return</button>
-    <button class="pill danger" onclick="key('C-c')">Ctrl-C</button>
-    <button class="pill" onclick="key('Up')">Up</button>
-    <button class="pill" onclick="key('Down')">Down</button>
-    <button class="pill" onclick="key('Tab')">Tab</button>
-    <button class="pill" onclick="key('Escape')">Esc</button>
-  </div>
-  <div id="cmds">
-    <button class="pill" onclick="prefill('/_my_wrap_up')">Wrap Up</button>
-    <button class="pill" onclick="prefill('/clear')">Clear</button>
-    <button class="pill" onclick="prefill('/exit')">Exit</button>
-    <button class="pill" onclick="sendResume()">Resume</button>
-    <button class="pill" onclick="renameCurrentWin()">Rename</button>
-  </div>
+</main>
 </div>
 
 <div id="details-overlay" onclick="if(event.target===this)closeDetails()">
@@ -445,24 +606,51 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 
 <script src="https://cdn.jsdelivr.net/npm/marked/lib/marked.umd.min.js"></script>
 <script>
-const O = document.getElementById('out');
 const M = document.getElementById('msg');
 const bar = document.getElementById('bar');
-const topbar = document.getElementById('topbar');
-let rawMode = false, rawContent = '', last = '';
-let pendingMsg = null, pendingTime = 0;
-let awaitingResponse = false;
-let lastOutputChange = 0;
+const panesContainer = document.getElementById('panes-container');
 
-function layout() {
-  O.style.top = topbar.offsetHeight + 'px';
-  O.style.bottom = bar.offsetHeight + 'px';
+// === Tab data model ===
+let openTabs = [];        // [{ id, session, windowIndex, windowName }]
+let activeTabId = null;
+let tabStates = {};       // tabId -> { rawContent, last, rawMode, pendingMsg, pendingTime, awaitingResponse, lastOutputChange, pollInterval }
+let splitMode = false;
+let _nextTabId = 1;
+let _dashboardData = null;
+
+// === Sidebar state ===
+let _sidebarCollapsed = false;
+
+// === Utility ===
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s; return d.innerHTML;
 }
-function isNearBottom() {
-  return O.scrollHeight - O.scrollTop - O.clientHeight < 80;
+function md(s) {
+  if (typeof marked !== 'undefined') {
+    marked.setOptions({ breaks: true });
+    return marked.parse(s);
+  }
+  return '<p>' + esc(s) + '</p>';
+}
+function abbreviateCwd(cwd) {
+  if (!cwd) return '';
+  const home = '/Users/';
+  let p = cwd;
+  if (p.startsWith(home)) {
+    const afterHome = p.substring(home.length);
+    const slash = afterHome.indexOf('/');
+    p = slash >= 0 ? '~' + afterHome.substring(slash) : '~';
+  }
+  const parts = p.split('/').filter(Boolean);
+  if (parts.length <= 2) return p;
+  return parts.slice(-2).join('/');
+}
+function tabKey(session, windowIndex) {
+  return session + ':' + windowIndex;
 }
 
-// --- Clean raw terminal output ---
+// === Clean/parse (unchanged logic) ===
 function cleanTerminal(raw) {
   let lines = raw.split('\\n');
   lines = lines.filter(l => !/^\\s*[\\u256d\\u2570][\\u2500\\u2504\\u2501]+[\\u256e\\u256f]\\s*$/.test(l));
@@ -472,60 +660,40 @@ function cleanTerminal(raw) {
   text = text.replace(/\\n{3,}/g, '\\n\\n');
   return text.trim();
 }
-
-// --- Detect Claude Code output ---
 function isClaudeCode(text) {
   return /\\u276f/.test(text) && /\\u23fa/.test(text);
 }
-
-// --- Detect if Claude Code is idle (done processing) ---
 function isIdle(text) {
   const tail = text.split('\\n').slice(-10).join('\\n');
-  // If there are active processing signals, not idle
   if (/esc to interrupt/.test(tail)) return false;
   if (/^\\u00b7\\s+\\w/m.test(tail)) return false;
-  // No processing signals — Claude is idle
   return true;
 }
-
-// --- Parse Claude Code session into turns ---
 function parseCCTurns(text) {
   const lines = text.split('\\n');
   const turns = [];
   let cur = null;
   let inTool = false;
   let sawStatus = false;
-
   for (const line of lines) {
     const raw = line.replace(/\\u00a0/g, ' ');
     const t = raw.trim();
-    // Skip noise
     if (/^[\\u2500\\u2501\\u2504\\u2508\\u2550]{3,}$/.test(t) && t.length > 60) continue;
     if (/^[\\u23f5]/.test(t)) continue;
     if (/^\\u2026/.test(t)) continue;
-    // Blank line: preserve as paragraph break in assistant text
     if (!t) {
       if (cur && cur.role === 'assistant' && !inTool) cur.lines.push('');
       continue;
     }
-    // Status lines (✻✳✹✽ etc.) — skip but track them
     if (/^[\\u2730-\\u273f]/.test(t)) { sawStatus = true; continue; }
-    // Extended thinking indicator (· Sketching…, · Thinking…) — skip
     if (/^\\u00b7\\s+\\w/.test(t)) { sawStatus = true; continue; }
-    // Status bar line (esc to interrupt, bypass permissions, etc.) — skip
     if (/esc to interrupt/.test(t)) continue;
-
-    // User prompt: ❯ at column 0 only (not indented examples in assistant text)
     if (/^\\u276f/.test(raw)) {
       if (cur) turns.push(cur);
       const msg = t.replace(/^\\u276f\\s*/, '').trim();
       cur = { role: 'user', lines: msg ? [msg] : [] };
-      inTool = false;
-      sawStatus = false;
-      continue;
+      inTool = false; sawStatus = false; continue;
     }
-
-    // ⏺ marker: text or tool call
     if (/^\\u23fa/.test(t)) {
       const after = t.replace(/^\\u23fa\\s*/, '');
       if (/^(Bash|Read|Write|Update|Edit|Fetch|Search|Glob|Grep|Task|Skill|NotebookEdit|Searched for|Wrote \\d)/.test(after)) {
@@ -541,17 +709,10 @@ function parseCCTurns(text) {
         if (cur) turns.push(cur);
         cur = { role: 'assistant', lines: [] };
       }
-      cur.lines.push(after);
-      continue;
+      cur.lines.push(after); continue;
     }
-
-    // ⎿ tool output
     if (/^\\u23bf/.test(t)) { inTool = true; continue; }
-
-    // Skip tool output lines
     if (inTool) continue;
-
-    // Continuation of current turn text
     if (cur && !inTool) {
       if (cur.role === 'assistant') cur.lines.push(t);
       else if (cur.role === 'user') cur.lines.push(t);
@@ -559,166 +720,299 @@ function parseCCTurns(text) {
   }
   if (cur) turns.push(cur);
   const filtered = turns.filter(t => t.lines.some(l => l.trim()));
-  // Remove trailing idle prompt (❯ with ghost suggestion text, no active processing)
   if (filtered.length > 0 && filtered[filtered.length - 1].role === 'user') {
-    if (!sawStatus && isIdle(text)) {
-      filtered.pop();
-    }
+    if (!sawStatus && isIdle(text)) filtered.pop();
   }
   return filtered;
 }
 
-function esc(s) {
-  const d = document.createElement('div');
-  d.textContent = s; return d.innerHTML;
-}
-
-function md(s) {
-  if (typeof marked !== 'undefined') {
-    marked.setOptions({ breaks: true });
-    return marked.parse(s);
-  }
-  return '<p>' + esc(s) + '</p>';
-}
-
-// --- Render output ---
-function renderOutput(raw) {
-  if (rawMode) {
-    O.className = 'raw';
-    O.textContent = raw;
-    layout();
+// === Render output into a target element ===
+function renderOutput(raw, targetEl, state) {
+  if (state.rawMode) {
+    targetEl.className = 'pane-output raw';
+    targetEl.textContent = raw;
     return;
   }
-
-  O.className = 'chat';
+  targetEl.className = 'pane-output chat';
   const clean = cleanTerminal(raw);
   let html = '';
-
   if (isClaudeCode(clean)) {
     const turns = parseCCTurns(clean);
-
-    // Check if parser caught up with our pending sent message
-    if (pendingMsg) {
+    if (state.pendingMsg) {
       const userTurns = turns.filter(t => t.role === 'user');
       const lastUser = userTurns[userTurns.length - 1];
-      if (lastUser && lastUser.lines.join(' ').includes(pendingMsg.substring(0, 20))) {
-        pendingMsg = null;  // Parser has our message, stop injecting it
+      if (lastUser && lastUser.lines.join(' ').includes(state.pendingMsg.substring(0, 20))) {
+        state.pendingMsg = null;
       }
     }
-    // Check if Claude is done working
-    if (awaitingResponse) {
-      const elapsed = Date.now() - pendingTime;
-      // Clear when Claude is idle and enough time has passed
-      if (elapsed > 3000 && isIdle(clean)) {
-        awaitingResponse = false;
-      }
-      // Clear when output hasn't changed for 5s (waiting for user input, e.g. menu)
-      if (elapsed > 3000 && lastOutputChange > 0 && (Date.now() - lastOutputChange) > 5000) {
-        awaitingResponse = false;
-      }
-      // Safety timeout: 3 minutes
-      if (elapsed > 180000) awaitingResponse = false;
+    if (state.awaitingResponse) {
+      const elapsed = Date.now() - state.pendingTime;
+      if (elapsed > 3000 && isIdle(clean)) state.awaitingResponse = false;
+      if (elapsed > 3000 && state.lastOutputChange > 0 && (Date.now() - state.lastOutputChange) > 5000) state.awaitingResponse = false;
+      if (elapsed > 180000) state.awaitingResponse = false;
     }
-
     for (const t of turns) {
       const text = t.lines.join('\\n').trim();
       if (!text) continue;
       if (t.role === 'user') {
-        html += '<div class="turn user">'
-          + '<div class="turn-label">You</div>'
+        html += '<div class="turn user"><div class="turn-label">You</div>'
           + '<div class="turn-body">' + esc(text) + '</div></div>';
       } else {
-        html += '<div class="turn assistant">'
-          + '<div class="turn-label">Claude</div>'
+        html += '<div class="turn assistant"><div class="turn-label">Claude</div>'
           + '<div class="turn-body">' + md(text) + '</div></div>';
       }
     }
-
-    // Inject sent message if parser hasn't caught up yet
-    if (pendingMsg) {
-      html += '<div class="turn user">'
-        + '<div class="turn-label">You</div>'
-        + '<div class="turn-body">' + esc(pendingMsg) + '</div></div>';
+    if (state.pendingMsg) {
+      html += '<div class="turn user"><div class="turn-label">You</div>'
+        + '<div class="turn-body">' + esc(state.pendingMsg) + '</div></div>';
     }
-    // Show thinking indicator while awaiting response
-    if (awaitingResponse) {
-      html += '<div class="turn assistant">'
-        + '<div class="turn-label">Claude</div>'
+    if (state.awaitingResponse) {
+      html += '<div class="turn assistant"><div class="turn-label">Claude</div>'
         + '<div class="turn-body"><p class="thinking">Working\\u2026</p></div></div>';
     }
   } else {
-    // Plain terminal — show as monospace
     if (clean.trim()) {
       html = '<div class="turn assistant"><div class="turn-label">Terminal</div>'
         + '<div class="turn-body mono">' + esc(clean) + '</div></div>';
     }
   }
-
   if (!html) {
-    html = '<div class="turn assistant">'
-      + '<div class="turn-label">Terminal</div>'
+    html = '<div class="turn assistant"><div class="turn-label">Terminal</div>'
       + '<div class="turn-body"><p style="color:var(--text3)">Waiting for output...</p></div></div>';
   }
-
-  O.innerHTML = html;
-  layout();
+  targetEl.innerHTML = html;
 }
 
-function toggleRaw() {
-  rawMode = !rawMode;
-  document.getElementById('view-label').textContent = rawMode ? 'Raw' : 'Clean';
-  renderOutput(rawContent || last);
-  O.scrollTop = O.scrollHeight;
+// === Tab management ===
+function createTab(session, windowIndex, windowName) {
+  // Check if tab already exists
+  const existing = openTabs.find(t => t.session === session && t.windowIndex === windowIndex);
+  if (existing) { focusTab(existing.id); return; }
+
+  const id = _nextTabId++;
+  openTabs.push({ id, session, windowIndex, windowName });
+  tabStates[id] = {
+    rawContent: '', last: '', rawMode: false,
+    pendingMsg: null, pendingTime: 0,
+    awaitingResponse: false, lastOutputChange: 0,
+    pollInterval: null,
+  };
+
+  // Create DOM pane
+  const pane = document.createElement('div');
+  pane.className = 'tab-pane';
+  pane.id = 'pane-' + id;
+  pane.innerHTML = '<div class="pane-header" onclick="focusTab(' + id + ')">'
+    + '<span>' + esc(windowName) + '</span></div>'
+    + '<div class="pane-output chat"><div class="turn assistant"><div class="turn-label">Terminal</div>'
+    + '<div class="turn-body"><p style="color:var(--text3)">Connecting...</p></div></div></div>';
+  panesContainer.appendChild(pane);
+
+  focusTab(id);
+  renderTabBar();
+  renderSidebar();
+  startTabPolling(id);
 }
 
-// --- Polling ---
-setInterval(async () => {
+function closeTab(id) {
+  stopTabPolling(id);
+  const idx = openTabs.findIndex(t => t.id === id);
+  if (idx < 0) return;
+  openTabs.splice(idx, 1);
+  delete tabStates[id];
+  const pane = document.getElementById('pane-' + id);
+  if (pane) pane.remove();
+
+  if (activeTabId === id) {
+    if (openTabs.length > 0) {
+      const next = openTabs[Math.min(idx, openTabs.length - 1)];
+      focusTab(next.id);
+    } else {
+      activeTabId = null;
+    }
+  }
+  renderTabBar();
+  renderSidebar();
+  updatePaneVisibility();
+}
+
+function focusTab(id) {
+  activeTabId = id;
+  // Update focused class on panes
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('focused'));
+  const pane = document.getElementById('pane-' + id);
+  if (pane) pane.classList.add('focused');
+  renderTabBar();
+  updatePaneVisibility();
+  // Start/stop polling based on visibility
+  updatePolling();
+}
+
+function renderTabBar() {
+  const tabBar = document.getElementById('tab-bar');
+  let html = '';
+  for (const tab of openTabs) {
+    const active = tab.id === activeTabId;
+    html += '<div class="tab' + (active ? ' active' : '') + '" onclick="focusTab(' + tab.id + ')">'
+      + '<span class="tab-name">' + esc(tab.windowName) + '</span>'
+      + '<span class="tab-close" onclick="event.stopPropagation();closeTab(' + tab.id + ')">&times;</span>'
+      + '</div>';
+  }
+  tabBar.innerHTML = html;
+}
+
+function updatePaneVisibility() {
+  const panes = document.querySelectorAll('.tab-pane');
+  if (splitMode) {
+    // Show all open tabs (up to 3)
+    panes.forEach(p => {
+      const id = parseInt(p.id.replace('pane-', ''));
+      const isOpen = openTabs.some(t => t.id === id);
+      p.classList.toggle('visible', isOpen);
+    });
+    panesContainer.classList.add('split-mode');
+  } else {
+    // Single tab view: show only active
+    panes.forEach(p => {
+      const id = parseInt(p.id.replace('pane-', ''));
+      p.classList.toggle('visible', id === activeTabId);
+    });
+    panesContainer.classList.remove('split-mode');
+  }
+}
+
+// === Polling per tab ===
+function startTabPolling(id) {
+  const state = tabStates[id];
+  if (!state || state.pollInterval) return;
+  const tab = openTabs.find(t => t.id === id);
+  if (!tab) return;
+
+  // Immediate first fetch
+  pollTab(id);
+
+  state.pollInterval = setInterval(() => pollTab(id), 1000);
+}
+
+function stopTabPolling(id) {
+  const state = tabStates[id];
+  if (!state) return;
+  if (state.pollInterval) {
+    clearInterval(state.pollInterval);
+    state.pollInterval = null;
+  }
+}
+
+async function pollTab(id) {
+  const tab = openTabs.find(t => t.id === id);
+  const state = tabStates[id];
+  if (!tab || !state) return;
   try {
-    const r = await fetch('/api/output');
+    const r = await fetch('/api/output?session=' + encodeURIComponent(tab.session) + '&window=' + tab.windowIndex);
     const d = await r.json();
-    if (d.output !== last) {
-      lastOutputChange = Date.now();
-      const atBottom = isNearBottom();
-      last = d.output; rawContent = d.output;
-      renderOutput(d.output);
-      if (atBottom) O.scrollTop = O.scrollHeight;
+    if (d.output !== state.last) {
+      state.lastOutputChange = Date.now();
+      state.last = d.output;
+      state.rawContent = d.output;
+      const pane = document.getElementById('pane-' + id);
+      if (!pane) return;
+      const outputEl = pane.querySelector('.pane-output');
+      if (!outputEl) return;
+      const atBottom = outputEl.scrollHeight - outputEl.scrollTop - outputEl.clientHeight < 80;
+      renderOutput(d.output, outputEl, state);
+      if (atBottom) outputEl.scrollTop = outputEl.scrollHeight;
     }
   } catch(e) {}
-}, 1000);
+}
 
-// --- Send ---
+function updatePolling() {
+  for (const tab of openTabs) {
+    const isVisible = splitMode || tab.id === activeTabId;
+    if (isVisible) {
+      startTabPolling(tab.id);
+    } else {
+      stopTabPolling(tab.id);
+    }
+  }
+}
+
+// === Split view ===
+function toggleSplit() {
+  splitMode = !splitMode;
+  document.getElementById('split-btn').classList.toggle('on', splitMode);
+  updatePaneVisibility();
+  updatePolling();
+}
+
+// === View toggle (per active tab) ===
+function toggleRaw() {
+  if (!activeTabId) return;
+  const state = tabStates[activeTabId];
+  if (!state) return;
+  state.rawMode = !state.rawMode;
+  document.getElementById('view-label').textContent = state.rawMode ? 'Raw' : 'Clean';
+  const pane = document.getElementById('pane-' + activeTabId);
+  if (!pane) return;
+  const outputEl = pane.querySelector('.pane-output');
+  if (!outputEl) return;
+  renderOutput(state.rawContent || state.last, outputEl, state);
+  outputEl.scrollTop = outputEl.scrollHeight;
+}
+
+// === Send ===
 async function send() {
   const t = M.value; if (!t) return;
+  if (!activeTabId) return;
+  const tab = openTabs.find(tb => tb.id === activeTabId);
+  const state = tabStates[activeTabId];
+  if (!tab || !state) return;
+
   M.value = '';
   M.style.height = 'auto';
-  pendingMsg = t;
-  pendingTime = Date.now();
-  awaitingResponse = true;
-  renderOutput(rawContent || last);
-  O.scrollTop = O.scrollHeight;
+  state.pendingMsg = t;
+  state.pendingTime = Date.now();
+  state.awaitingResponse = true;
+
+  const pane = document.getElementById('pane-' + activeTabId);
+  if (pane) {
+    const outputEl = pane.querySelector('.pane-output');
+    if (outputEl) {
+      renderOutput(state.rawContent || state.last, outputEl, state);
+      outputEl.scrollTop = outputEl.scrollHeight;
+    }
+  }
+
   await fetch('/api/send', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({cmd: t})
+    body: JSON.stringify({ cmd: t, session: tab.session, window: tab.windowIndex })
   });
 }
-async function key(k) { await fetch('/api/key/' + k); }
 
-// --- Keys tray ---
-// --- Prefill input (user must press Enter to send) ---
+async function key(k) {
+  if (!activeTabId) return;
+  const tab = openTabs.find(t => t.id === activeTabId);
+  if (!tab) return;
+  await fetch('/api/key/' + k + '?session=' + encodeURIComponent(tab.session) + '&window=' + tab.windowIndex);
+}
+
+// === Keys/Commands trays ===
 function prefill(text) {
   M.value = M.value ? M.value + ' ' + text : text;
   M.focus();
 }
 
 async function sendResume() {
-  // Switch to raw view so user can see the interactive menu
-  if (!rawMode) {
-    rawMode = true;
+  if (!activeTabId) return;
+  const state = tabStates[activeTabId];
+  const tab = openTabs.find(t => t.id === activeTabId);
+  if (!state || !tab) return;
+  if (!state.rawMode) {
+    state.rawMode = true;
     document.getElementById('view-label').textContent = 'Raw';
   }
   await fetch('/api/send', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({cmd: '/resume'})
+    body: JSON.stringify({ cmd: '/resume', session: tab.session, window: tab.windowIndex })
   });
 }
 
@@ -726,32 +1020,60 @@ function toggleKeys() {
   const on = document.getElementById('keys').classList.toggle('open');
   document.getElementById('keysBtn').classList.toggle('on', on);
   if (on) { document.getElementById('cmds').classList.remove('open'); document.getElementById('commandsBtn').classList.remove('on'); }
-  requestAnimationFrame(layout);
-  setTimeout(layout, 300);
 }
 function toggleCmds() {
   const on = document.getElementById('cmds').classList.toggle('open');
   document.getElementById('commandsBtn').classList.toggle('on', on);
   if (on) { document.getElementById('keys').classList.remove('open'); document.getElementById('keysBtn').classList.remove('on'); }
-  requestAnimationFrame(layout);
-  setTimeout(layout, 300);
 }
-function renameCurrentWin() { openRename(); }
 
-// --- Send a preset command ---
-async function sendCmd(cmd) {
-  pendingMsg = cmd;
-  pendingTime = Date.now();
-  awaitingResponse = true;
-  renderOutput(rawContent || last);
-  O.scrollTop = O.scrollHeight;
-  await fetch('/api/send', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({cmd: cmd})
+// === Rename (operates on active tab's window) ===
+let _currentWindows = [];
+function renameCurrentWin() { openRename(); }
+function openRename() {
+  if (!activeTabId) return;
+  const tab = openTabs.find(t => t.id === activeTabId);
+  if (!tab) return;
+  const input = document.getElementById('rename-input');
+  input.value = tab.windowName;
+  document.getElementById('rename-overlay').classList.add('open');
+  setTimeout(() => { input.focus(); input.select(); }, 100);
+}
+function closeRename() {
+  document.getElementById('rename-overlay').classList.remove('open');
+}
+function confirmRename() {
+  if (!activeTabId) return;
+  const tab = openTabs.find(t => t.id === activeTabId);
+  if (!tab) return;
+  const name = document.getElementById('rename-input').value.trim();
+  if (!name) return;
+  fetch('/api/windows/' + tab.windowIndex, {
+    method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name: name})
+  }).then(() => {
+    tab.windowName = name;
+    renderTabBar();
+    closeRename();
+    loadDashboard();
+  });
+}
+function resetWindowName() {
+  if (!activeTabId) return;
+  const tab = openTabs.find(t => t.id === activeTabId);
+  if (!tab) return;
+  fetch('/api/windows/current/reset-name', {method:'POST'}).then(() => {
+    closeRename();
+    loadDashboard();
   });
 }
 
-// --- Details popup ---
+document.getElementById('rename-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); confirmRename(); }
+  if (e.key === 'Escape') { e.preventDefault(); closeRename(); }
+});
+
+// === Details popup ===
 function openDetails() {
   document.getElementById('details-overlay').classList.add('open');
   document.getElementById('details-content').innerHTML = '<p style="color:var(--text3)">Loading...</p>';
@@ -772,153 +1094,167 @@ function closeDetails() {
   document.getElementById('details-overlay').classList.remove('open');
 }
 
-// --- Window naming ---
-let _currentSession = '';
-let _currentWindows = [];
-
-function isWindowNameTaken(name) {
-  const activeWin = _currentWindows.find(w => w.active);
-  return _currentWindows.some(w => w.name === name && w !== activeWin);
+// === Sidebar ===
+function toggleSidebar() {
+  _sidebarCollapsed = !_sidebarCollapsed;
+  document.getElementById('sidebar').classList.toggle('collapsed', _sidebarCollapsed);
+  document.getElementById('collapse-btn').textContent = _sidebarCollapsed ? '\\u00bb' : '\\u00ab';
 }
 
-function openRename() {
-  const activeWin = _currentWindows.find(w => w.active);
-  const input = document.getElementById('rename-input');
-  input.value = activeWin ? activeWin.name : '';
-  document.getElementById('rename-overlay').classList.add('open');
-  setTimeout(() => { input.focus(); input.select(); }, 100);
+function openMobileSidebar() {
+  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('sidebar').classList.remove('collapsed');
+  document.getElementById('sidebar-backdrop').classList.add('open');
 }
-function closeRename() {
-  document.getElementById('rename-overlay').classList.remove('open');
-}
-function confirmRename() {
-  const name = document.getElementById('rename-input').value.trim();
-  if (!name) return;
-  if (isWindowNameTaken(name)) { alert('That name is already in use'); return; }
-  fetch('/api/windows/current', {
-    method:'PUT', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({name: name})
-  }).then(() => {
-    closeRename();
-    loadSessions();
-  });
-}
-function resetWindowName() {
-  fetch('/api/windows/current/reset-name', {method:'POST'}).then(() => {
-    closeRename();
-    loadSessions();
-  });
+function closeMobileSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebar-backdrop').classList.remove('open');
 }
 
-document.getElementById('rename-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter') { e.preventDefault(); confirmRename(); }
-  if (e.key === 'Escape') { e.preventDefault(); closeRename(); }
-});
-
-
-
-// --- tmux navigation ---
-let _tmuxOpen = false;
-
-function toggleTmux() {
-  _tmuxOpen = !_tmuxOpen;
-  document.getElementById('tmux-btn').classList.toggle('on', _tmuxOpen);
-  document.getElementById('tmux-panel').classList.toggle('open', _tmuxOpen);
-  if (_tmuxOpen) loadSessions();
-  requestAnimationFrame(layout);
-  setTimeout(layout, 300);
-}
-
-async function loadSessions() {
-  const r = await fetch('/api/sessions');
-  const d = await r.json();
-  _currentSession = d.current;
-  // Cache current session's windows and update tmux button label
-  const curSession = d.sessions.find(s => s.name === d.current);
-  if (curSession) {
-    _currentWindows = curSession.windows;
-    const activeWin = curSession.windows.find(w => w.active);
-    const winName = activeWin ? activeWin.name : '';
-    document.getElementById('tmux-label').textContent =
-      'tmux: ' + d.current + (winName ? ' | ' + winName : '');
-  }
-  const panel = document.getElementById('tmux-panel');
+function renderSidebar() {
+  const data = _dashboardData;
+  if (!data) return;
+  const content = document.getElementById('sidebar-content');
   let html = '';
-  for (const s of d.sessions) {
-    const isCurrent = s.name === d.current;
-    html += '<div class="tmux-session">';
-    html += '<div class="tmux-session-header' + (isCurrent ? ' current' : '') + '">'
+  for (const s of data.sessions) {
+    html += '<div class="sb-session">';
+    html += '<div class="sb-session-header">'
       + esc(s.name)
-      + (isCurrent ? ' <span class="badge">active</span>' : '')
+      + (s.attached ? ' <span class="sb-badge">attached</span>' : '')
       + '</div>';
-    html += '<div class="tmux-windows">';
     for (const w of s.windows) {
-      const active = isCurrent && w.active;
-      html += '<button class="tmux-win' + (active ? ' active' : '') + '"'
-        + ' onclick="switchSession(\\'' + esc(s.name) + '\\', ' + w.index + ')">'
-        + '<span class="win-idx">' + w.index + ':</span> ' + esc(w.name)
-        + '</button>';
+      const key = tabKey(s.name, w.index);
+      const hasTab = openTabs.some(t => t.session === s.name && t.windowIndex === w.index);
+      const dotClass = w.is_cc ? (w.cc_status || 'idle') : 'none';
+      html += '<div class="sb-win' + (hasTab ? ' has-tab' : '') + '"'
+        + ' onclick="openTab(\\'' + esc(s.name).replace(/'/g, "\\\\'") + '\\',' + w.index + ',\\'' + esc(w.name).replace(/'/g, "\\\\'") + '\\')">'
+        + '<div class="sb-win-dot ' + dotClass + '"></div>'
+        + '<div class="sb-win-info">'
+        + '<div class="sb-win-name">' + esc(w.name) + '</div>'
+        + '<div class="sb-win-cwd">' + esc(abbreviateCwd(w.cwd)) + '</div>'
+        + '</div></div>';
     }
-    if (isCurrent) {
-      html += '<button class="tmux-win" onclick="newWin()"'
-        + ' style="color:var(--text3);border-style:dashed">+ new</button>';
-    }
-    html += '</div></div>';
+    html += '</div>';
   }
-  panel.innerHTML = html;
+  content.innerHTML = html;
 }
 
-async function switchSession(name, winIndex) {
-  await fetch('/api/sessions/' + encodeURIComponent(name), {method:'POST'});
-  if (winIndex !== undefined) {
-    await fetch('/api/windows/' + winIndex, {method:'POST'});
-  }
-  // Clear stale data and fetch new session output immediately
-  last = ''; rawContent = '';
-  pendingMsg = null; awaitingResponse = false;
-  toggleTmux();
-  loadSessions();
+function openTab(session, windowIndex, windowName) {
+  closeMobileSidebar();
+  createTab(session, windowIndex, windowName);
+}
+
+async function loadDashboard() {
   try {
-    const r = await fetch('/api/output');
-    const d = await r.json();
-    last = d.output; rawContent = d.output;
-    renderOutput(d.output);
-    O.scrollTop = O.scrollHeight;
+    const r = await fetch('/api/dashboard');
+    _dashboardData = await r.json();
+    renderSidebar();
+    // Update tab names from dashboard data
+    for (const tab of openTabs) {
+      const sess = _dashboardData.sessions.find(s => s.name === tab.session);
+      if (sess) {
+        const win = sess.windows.find(w => w.index === tab.windowIndex);
+        if (win && win.name !== tab.windowName) {
+          tab.windowName = win.name;
+        }
+      }
+    }
+    renderTabBar();
   } catch(e) {}
 }
 
 async function newWin() {
   await fetch('/api/windows/new', {method:'POST'});
-  last = ''; loadSessions();
+  await loadDashboard();
+  // Open a tab for the new window (highest index in current session)
+  if (_dashboardData) {
+    // Find session that matches the first open tab, or first session
+    let sessName = openTabs.length > 0 ? openTabs[0].session : null;
+    if (!sessName && _dashboardData.sessions.length > 0) sessName = _dashboardData.sessions[0].name;
+    const sess = _dashboardData.sessions.find(s => s.name === sessName);
+    if (sess && sess.windows.length > 0) {
+      const w = sess.windows[sess.windows.length - 1];
+      createTab(sessName, w.index, w.name);
+    }
+  }
 }
 
-// --- Input ---
+// === Send a preset command ===
+async function sendCmd(cmd) {
+  if (!activeTabId) return;
+  const tab = openTabs.find(t => t.id === activeTabId);
+  const state = tabStates[activeTabId];
+  if (!tab || !state) return;
+  state.pendingMsg = cmd;
+  state.pendingTime = Date.now();
+  state.awaitingResponse = true;
+  const pane = document.getElementById('pane-' + activeTabId);
+  if (pane) {
+    const outputEl = pane.querySelector('.pane-output');
+    if (outputEl) {
+      renderOutput(state.rawContent || state.last, outputEl, state);
+      outputEl.scrollTop = outputEl.scrollHeight;
+    }
+  }
+  await fetch('/api/send', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ cmd: cmd, session: tab.session, window: tab.windowIndex })
+  });
+}
+
+// === Input ===
 function autoResize() {
   M.style.height = 'auto';
   M.style.height = Math.min(M.scrollHeight, 120) + 'px';
   M.style.overflowY = M.scrollHeight > 120 ? 'auto' : 'hidden';
-  layout();
 }
 M.addEventListener('input', autoResize);
 M.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
 
-// --- iOS keyboard ---
+// === iOS keyboard ===
 if (window.visualViewport) {
   const adjust = () => {
     bar.style.bottom = (window.innerHeight - window.visualViewport.height) + 'px';
-    layout();
   };
   window.visualViewport.addEventListener('resize', adjust);
   window.visualViewport.addEventListener('scroll', adjust);
 }
 
-// --- Init ---
-loadSessions();
-requestAnimationFrame(layout);
-new ResizeObserver(layout).observe(bar);
-new ResizeObserver(layout).observe(topbar);
+// === Keyboard shortcuts ===
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  // Cmd+1/2/3 to switch tabs
+  if ((e.metaKey || e.ctrlKey) && e.key >= '1' && e.key <= '9') {
+    const idx = parseInt(e.key) - 1;
+    if (idx < openTabs.length) {
+      e.preventDefault();
+      focusTab(openTabs[idx].id);
+    }
+  }
+  // Cmd+\\ to toggle sidebar
+  if ((e.metaKey || e.ctrlKey) && e.key === '\\\\') {
+    e.preventDefault();
+    toggleSidebar();
+  }
+});
+
+// === Init ===
+async function init() {
+  await loadDashboard();
+  // Open first tab for the first session's active window
+  if (_dashboardData && _dashboardData.sessions.length > 0) {
+    const sess = _dashboardData.sessions[0];
+    const activeWin = sess.windows.find(w => w.active) || sess.windows[0];
+    if (activeWin) {
+      createTab(sess.name, activeWin.index, activeWin.name);
+    }
+  }
+  // Dashboard polling every 4s
+  setInterval(loadDashboard, 4000);
+}
+init();
 </script>
 </body>
 </html>"""
@@ -932,24 +1268,31 @@ async def index():
 
 
 @app.get("/api/output")
-async def api_output():
-    return JSONResponse({"output": get_output()})
+async def api_output(session: str = None, window: int = None):
+    return JSONResponse({"output": get_output(session, window)})
 
 
 @app.post("/api/send")
 async def api_send(body: dict):
     cmd = body.get("cmd", "")
+    session = body.get("session", None)
+    window = body.get("window", None)
     if cmd:
-        send_keys(cmd)
+        send_keys(cmd, session, window)
     return JSONResponse({"ok": True})
 
 
 @app.get("/api/key/{key}")
-async def api_key(key: str):
+async def api_key(key: str, session: str = None, window: int = None):
     ALLOWED = {"C-c", "C-d", "C-l", "C-z", "Up", "Down", "Tab", "Enter", "Escape"}
     if key in ALLOWED:
-        send_special(key)
+        send_special(key, session, window)
     return JSONResponse({"ok": True})
+
+
+@app.get("/api/dashboard")
+async def api_dashboard():
+    return JSONResponse(get_dashboard())
 
 
 @app.get("/api/windows")
