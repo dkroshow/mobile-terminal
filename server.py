@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -86,30 +87,56 @@ def get_pane_preview(session: str, window: int, lines: int = 5) -> str:
     return text.strip()
 
 
-def detect_cc_status(text: str) -> tuple:
+def detect_cc_status(text: str, activity_age: float = None) -> tuple:
     """Detect if text is Claude Code output and its status.
-    Returns (is_cc, status): idle, working, or thinking."""
+    Returns (is_cc, status): idle, working, or thinking.
+    """
     is_cc = '\u276f' in text and '\u23fa' in text
     if not is_cc:
         return False, None
-    tail = '\n'.join(text.split('\n')[-10:])
-    # Thinking: · at START of line (not mid-line separators like "· 7 files")
-    if re.search(r'^\u00b7\s+\w', tail, re.MULTILINE):
-        return True, 'thinking'
-    # Working: "esc to interrupt" on its own (not inside permissions/edit bar)
-    for line in tail.split('\n'):
-        stripped = line.strip()
-        if 'esc to interrupt' in stripped and 'shift+tab' not in stripped:
-            return True, 'working'
-    return True, 'idle'
+
+    lines = text.split('\n')
+
+    # --- Text signals ---
+
+    # 1. "esc to interrupt" on the status bar (line starting with ⏵)
+    #    In current CC, this appears on the same line as the permissions bar:
+    #    "⏵⏵ bypass permissions on (shift+tab to cycle) · 3 files · esc to interrupt"
+    has_working = False
+    for line in lines[-3:]:
+        if '\u23f5' in line and 'esc to interrupt' in line:
+            has_working = True
+            break
+
+    # 2. Thinking: · at START of any line in last 20 lines
+    tail = '\n'.join(lines[-20:])
+    has_thinking = bool(re.search(r'^\u00b7', tail, re.MULTILINE))
+
+    # --- Determine status ---
+    # Note: ❯ prompt is always visible in CC TUI chrome (fixed layout),
+    # so we can't use it to distinguish idle vs working.
+    # Instead, activity_age is the primary "is something happening?" signal.
+    if has_working:
+        status = 'working'
+    elif has_thinking:
+        status = 'thinking'
+    elif activity_age is not None and activity_age < 5:
+        # Terminal is actively receiving output — Claude is doing something
+        # (idle CC produces NO output, so activity_age grows quickly)
+        status = 'working'
+    else:
+        status = 'idle'
+
+    return True, status
 
 
 def get_dashboard() -> dict:
     """Get lightweight status for all sessions and windows."""
-    # Single call to get all pane metadata
+    now = time.time()
+    # Single call to get all pane metadata including activity timestamp
     r = subprocess.run(
         ["tmux", "list-panes", "-a", "-F",
-         "#{session_name}\t#{window_index}\t#{window_name}\t#{pane_current_path}\t#{pane_current_command}\t#{window_active}\t#{session_attached}\t#{pane_pid}"],
+         "#{session_name}\t#{window_index}\t#{window_name}\t#{pane_current_path}\t#{pane_current_command}\t#{window_active}\t#{session_attached}\t#{pane_pid}\t#{window_activity}"],
         capture_output=True, text=True,
     )
     sessions = {}
@@ -117,18 +144,23 @@ def get_dashboard() -> dict:
         if not line:
             continue
         parts = line.split("\t")
-        if len(parts) < 8:
+        if len(parts) < 9:
             continue
-        sname, widx, wname, cwd, cmd, wactive, sattached, pid = parts
+        sname, widx, wname, cwd, cmd, wactive, sattached, pid, wactivity = parts
         if sname not in sessions:
             sessions[sname] = {
                 "name": sname,
                 "attached": sattached == "1",
                 "windows": [],
             }
-        # Get preview for CC detection
-        preview = get_pane_preview(sname, int(widx), lines=10)
-        is_cc, cc_status = detect_cc_status(preview)
+        # Activity age: seconds since tmux last received output for this pane
+        try:
+            activity_age = now - int(wactivity)
+        except (ValueError, TypeError):
+            activity_age = None
+        # Get preview for CC detection (20 lines for better signal coverage)
+        preview = get_pane_preview(sname, int(widx), lines=20)
+        is_cc, cc_status = detect_cc_status(preview, activity_age=activity_age)
         # Trim preview to last 5 lines for response
         preview_short = '\n'.join(preview.split('\n')[-5:])
         sessions[sname]["windows"].append({
@@ -665,6 +697,28 @@ function statusLabel(cc_status) {
   if (cc_status === 'idle') return 'Standby';
   return '';
 }
+function detectCCStatus(text) {
+  // Quick client-side CC status detection from output text
+  if (!isClaudeCode(text)) return null;
+  const lines = text.split('\\n');
+  // Check status bar (last line with ⏵) for "esc to interrupt"
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 5); i--) {
+    if (/^\\s*\\u23f5/.test(lines[i])) {
+      if (/esc to interrupt/.test(lines[i])) return 'working';
+      break;
+    }
+  }
+  // Check for thinking indicator
+  if (/^\\u00b7/m.test(lines.slice(-15).join('\\n'))) return 'thinking';
+  return 'idle';
+}
+function updateSidebarStatus(session, windowIndex, ccStatus) {
+  const wid = session + ':' + windowIndex;
+  const dot = document.querySelector('.sb-win-dot[data-wid="' + wid + '"]');
+  const lbl = document.querySelector('.sb-win-status[data-wid="' + wid + '"]');
+  if (dot) { dot.className = 'sb-win-dot ' + (ccStatus || 'idle'); }
+  if (lbl) { lbl.className = 'sb-win-status ' + (ccStatus || 'idle'); lbl.textContent = statusLabel(ccStatus); }
+}
 
 // === Clean/parse (unchanged core logic) ===
 function cleanTerminal(raw) {
@@ -678,9 +732,18 @@ function cleanTerminal(raw) {
 }
 function isClaudeCode(text) { return /\\u276f/.test(text) && /\\u23fa/.test(text); }
 function isIdle(text) {
-  const tail = text.split('\\n').slice(-10).join('\\n');
-  if (/esc to interrupt/.test(tail)) return false;
-  if (/^\\u00b7\\s+\\w/m.test(tail)) return false;
+  const lines = text.split('\\n');
+  // Check status bar (last line starting with ⏵) for "esc to interrupt"
+  // Only check the status bar line, not conversation content
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 5); i--) {
+    if (/^\\s*\\u23f5/.test(lines[i])) {
+      if (/esc to interrupt/.test(lines[i])) return false;
+      break;
+    }
+  }
+  // Check last 15 lines for thinking indicator (· at start of line)
+  const tail = lines.slice(-15).join('\\n');
+  if (/^\\u00b7/m.test(tail)) return false;
   return true;
 }
 function parseCCTurns(text) {
@@ -693,8 +756,8 @@ function parseCCTurns(text) {
     if (/^[\\u23f5]/.test(t)) continue;
     if (/^\\u2026/.test(t)) continue;
     if (!t) { if (cur && cur.role === 'assistant' && !inTool) cur.lines.push(''); continue; }
-    if (/^[\\u2730-\\u273f]/.test(t)) { sawStatus = true; continue; }
-    if (/^\\u00b7\\s+\\w/.test(t)) { sawStatus = true; continue; }
+    if (/^[\\u2720-\\u273f]/.test(t)) { sawStatus = true; continue; }
+    if (/^\\u00b7/.test(t)) { sawStatus = true; continue; }
     if (/esc to interrupt/.test(t)) continue;
     if (/^\\u276f/.test(raw)) {
       if (cur) turns.push(cur);
@@ -704,12 +767,17 @@ function parseCCTurns(text) {
     if (/^\\u23fa/.test(t)) {
       const after = t.replace(/^\\u23fa\\s*/, '');
       if (/^(Bash|Read|Write|Update|Edit|Fetch|Search|Glob|Grep|Task|Skill|NotebookEdit|Searched for|Wrote \\d)/.test(after)) {
+        // Tool call: close current card before entering tool mode
+        if (cur && cur.lines && cur.lines.some(l => l.trim())) { turns.push(cur); cur = null; }
         inTool = true;
-        if (!cur || cur.role !== 'assistant') { if (cur) turns.push(cur); cur = { role: 'assistant', lines: [] }; }
         continue;
       }
+      // Regular assistant text — start new card if coming out of tool call
+      if (inTool || !cur || cur.role !== 'assistant') {
+        if (cur && cur.lines && cur.lines.some(l => l.trim())) turns.push(cur);
+        cur = { role: 'assistant', lines: [] };
+      }
       inTool = false;
-      if (!cur || cur.role !== 'assistant') { if (cur) turns.push(cur); cur = { role: 'assistant', lines: [] }; }
       cur.lines.push(after); continue;
     }
     if (/^\\u23bf/.test(t)) { inTool = true; continue; }
@@ -1050,6 +1118,10 @@ async function pollTab(tabId) {
   try {
     const r = await fetch('/api/output?session=' + encodeURIComponent(tab.session) + '&window=' + tab.windowIndex);
     const d = await r.json();
+    // Update sidebar status on every poll (1s latency vs 3s dashboard)
+    const clean = cleanTerminal(d.output);
+    const liveStatus = detectCCStatus(clean);
+    if (liveStatus) updateSidebarStatus(tab.session, tab.windowIndex, liveStatus);
     if (d.output !== state.last) {
       state.lastOutputChange = Date.now();
       state.last = d.output; state.rawContent = d.output;
@@ -1209,13 +1281,14 @@ function renderSidebar() {
       const dotClass = w.is_cc ? (w.cc_status || 'idle') : 'none';
       const status = w.is_cc ? statusLabel(w.cc_status) : '';
       const statusClass = w.is_cc ? (w.cc_status || 'idle') : '';
+      const wid = esc(s.name) + ':' + w.index;
       html += '<div class="sb-win' + (hasTab ? ' has-tab' : '') + '">'
-        + '<div class="sb-win-dot ' + dotClass + '" onclick="event.stopPropagation();openTab(\\'' + esc(s.name).replace(/'/g, "\\\\'") + '\\',' + w.index + ',\\'' + esc(w.name).replace(/'/g, "\\\\'") + '\\')"></div>'
+        + '<div class="sb-win-dot ' + dotClass + '" data-wid="' + wid + '" onclick="event.stopPropagation();openTab(\\'' + esc(s.name).replace(/'/g, "\\\\'") + '\\',' + w.index + ',\\'' + esc(w.name).replace(/'/g, "\\\\'") + '\\')"></div>'
         + '<div class="sb-win-info" onclick="openTab(\\'' + esc(s.name).replace(/'/g, "\\\\'") + '\\',' + w.index + ',\\'' + esc(w.name).replace(/'/g, "\\\\'") + '\\')">'
         + '<div class="sb-win-name">' + esc(w.name) + '</div>'
         + '<div class="sb-win-cwd">' + esc(abbreviateCwd(w.cwd)) + '</div>'
         + '</div>'
-        + (status ? '<div class="sb-win-status ' + statusClass + '">' + status + '</div>' : '')
+        + '<div class="sb-win-status ' + statusClass + '" data-wid="' + wid + '">' + status + '</div>'
         + '<button class="sb-win-detail-btn" onclick="event.stopPropagation();openWD(\\'' + esc(s.name).replace(/'/g, "\\\\'") + '\\',' + w.index + ')" title="Details">&#9432;</button>'
         + '</div>';
     }
@@ -1381,7 +1454,7 @@ async function init() {
     const activeWin = sess.windows.find(w => w.active) || sess.windows[0];
     if (activeWin) createTab(sess.name, activeWin.index, activeWin.name);
   }
-  setInterval(loadDashboard, 4000);
+  setInterval(loadDashboard, 3000);
 }
 init();
 </script>
