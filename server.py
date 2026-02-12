@@ -414,7 +414,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .pane-input.visible { display:flex; gap:8px; align-items:flex-end; }
 .pane-input textarea { flex:1; background:var(--surface); color:var(--text);
   border:1px solid var(--border2); border-radius:16px; padding:8px 14px;
-  font-size:14px; font-family:inherit; outline:none; resize:none;
+  font-size:var(--text-size); font-family:inherit; outline:none; resize:none;
   overflow-y:hidden; max-height:80px; line-height:1.4; }
 .pane-input textarea::placeholder { color:var(--text3); }
 .pane-input textarea:focus { border-color:rgba(217,119,87,0.5); }
@@ -513,7 +513,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 #input-row { display:flex; gap:10px; align-items:flex-end; }
 #msg { flex:1; background:var(--surface); color:var(--text);
   border:1px solid var(--border2); border-radius:22px; padding:10px 16px;
-  font-size:15px; font-family:inherit; outline:none;
+  font-size:var(--text-size); font-family:inherit; outline:none;
   transition:border-color .2s, box-shadow .2s;
   resize:none; overflow-y:hidden; max-height:120px;
   line-height:1.4; }
@@ -819,13 +819,17 @@ function renderOutput(raw, targetEl, state) {
       if (elapsed > 3000 && state.lastOutputChange > 0 && (Date.now() - state.lastOutputChange) > 5000) state.awaitingResponse = false;
       if (elapsed > 180000) state.awaitingResponse = false;
     }
+    let lastRole = '';
     for (const t of turns) {
       const text = t.lines.join('\\n').trim();
       if (!text) continue;
-      if (t.role === 'user')
+      if (t.role === 'user') {
         html += '<div class="turn user"><div class="turn-label">You</div><div class="turn-body">' + esc(text) + '</div></div>';
-      else
-        html += '<div class="turn assistant"><div class="turn-label">Claude</div><div class="turn-body">' + md(text) + '</div></div>';
+      } else {
+        const label = lastRole !== 'assistant' ? 'Claude' : '';
+        html += '<div class="turn assistant"><div class="turn-label">' + label + '</div><div class="turn-body">' + md(text) + '</div></div>';
+      }
+      lastRole = t.role;
     }
     if (state.pendingMsg)
       html += '<div class="turn user"><div class="turn-label">You</div><div class="turn-body">' + esc(state.pendingMsg) + '</div></div>';
