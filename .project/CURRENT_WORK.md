@@ -64,6 +64,21 @@
 - **2026-02-13**: Sidebar snippet — `extractSnippet()` finds last `⏺` block in 40-line preview, shows first line as italic truncated text below perm mode for idle CC windows.
 - **2026-02-13**: Sidebar memo — per-window editable note (`localStorage memo:session:windowIndex`). Click "+ note" to add; inline edit with Enter/Escape/blur save. `renderSidebar()` guard skips re-render during edit.
 
+## Recently Completed (cont. 8)
+- **2026-02-13**: Architecture audit & cleanup — 5-agent parallel audit (backend, frontend JS, CSS/HTML, parser/CC detection, queue/layout). Fixed:
+  - Backend CC detection aligned with frontend: banner fallback, 5-line status bar window (was 3), 15-line thinking window (was 20), line-start anchoring
+  - `_run()` wrapper on all subprocess calls with 5s timeout (was no timeout)
+  - `clean_terminal_text()` extracted from duplicated ANSI stripping logic
+  - try/catch on all 12+ frontend fetch calls (queue dispatch pauses on failure)
+  - Page Visibility API pauses all polling when tab is backgrounded
+  - `--surface2` CSS variable fixed (was undefined), dead `.waiting` class removed
+  - Touch targets improved: tab close 14→20px, dividers/resize handles get 16px invisible hit areas
+  - CSS variables for accent colors (`--accent-dim`, `--accent-focus`), queue playing color uses `--green`
+  - Mobile sidebar width uses `--sidebar-w` instead of hardcoded 280px
+  - `pauseQueue()` now persists state via `saveQueue()`
+  - `moveTabToPane()` updates queue panel
+  - `cleanupStaleStorage()` on init prunes orphaned notepad/memo/queue/sidebar-order keys
+
 ## Active Work
 None
 

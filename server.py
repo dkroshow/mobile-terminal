@@ -30,11 +30,32 @@ ANSI_RE = re.compile(
 )
 
 
+TMUX_TIMEOUT = 5  # seconds — prevents requests from hanging if tmux is unresponsive
+
+
+def _run(cmd, **kwargs):
+    """Run a subprocess with a default timeout."""
+    kwargs.setdefault('timeout', TMUX_TIMEOUT)
+    try:
+        return subprocess.run(cmd, **kwargs)
+    except subprocess.TimeoutExpired:
+        # Return a fake result so callers don't crash
+        r = subprocess.CompletedProcess(cmd, returncode=1, stdout='', stderr='timeout')
+        return r
+
+
+def clean_terminal_text(text: str) -> str:
+    """Strip ANSI escapes and control characters from terminal output."""
+    text = ANSI_RE.sub("", text)
+    text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]', '', text)
+    return text
+
+
 def ensure_session():
-    r = subprocess.run(["tmux", "has-session", "-t", _current_session], capture_output=True)
+    r = _run(["tmux", "has-session", "-t", _current_session], capture_output=True)
     if r.returncode != 0:
         work_dir = WORK_DIR if Path(WORK_DIR).is_dir() else str(Path.home())
-        subprocess.run([
+        _run([
             "tmux", "new-session", "-d", "-s", _current_session,
             "-x", "80", "-y", "50", "-c", work_dir,
         ])
@@ -51,33 +72,32 @@ def _tmux_target(session=None, window=None):
 def send_keys(text: str, session=None, window=None):
     target = _tmux_target(session, window)
     # Clear any existing input on the line before sending (Ctrl-U + Ctrl-K)
-    subprocess.run(["tmux", "send-keys", "-t", target, "C-u"])
+    _run(["tmux", "send-keys", "-t", target, "C-u"])
     # For large text, use set-buffer + paste-buffer for reliable delivery
     # -p enables bracketed paste so TUI apps (CC) treat it as a single paste, not line-by-line input
     if len(text) > 500 or '\n' in text:
         buf_name = "_mt_paste"
-        subprocess.run(["tmux", "load-buffer", "-b", buf_name, "-"], input=text.encode())
-        subprocess.run(["tmux", "paste-buffer", "-d", "-p", "-b", buf_name, "-t", target])
+        _run(["tmux", "load-buffer", "-b", buf_name, "-"], input=text.encode())
+        _run(["tmux", "paste-buffer", "-d", "-p", "-b", buf_name, "-t", target])
         time.sleep(0.05)  # Let TUI process bracketed paste before sending Enter
-        subprocess.run(["tmux", "send-keys", "-t", target, "Enter"])
+        _run(["tmux", "send-keys", "-t", target, "Enter"])
     else:
-        subprocess.run(["tmux", "send-keys", "-t", target, "-l", text])
-        subprocess.run(["tmux", "send-keys", "-t", target, "Enter"])
+        _run(["tmux", "send-keys", "-t", target, "-l", text])
+        _run(["tmux", "send-keys", "-t", target, "Enter"])
 
 
 def send_special(key: str, session=None, window=None):
     target = _tmux_target(session, window)
-    subprocess.run(["tmux", "send-keys", "-t", target, key])
+    _run(["tmux", "send-keys", "-t", target, key])
 
 
 def get_output(session=None, window=None) -> str:
     target = _tmux_target(session, window)
-    r = subprocess.run(
+    r = _run(
         ["tmux", "capture-pane", "-t", target, "-p", "-S", "-200"],
         capture_output=True, text=True,
     )
-    text = ANSI_RE.sub("", r.stdout)
-    text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]', '', text)
+    text = clean_terminal_text(r.stdout)
     lines = text.split("\n")
     while lines and not lines[0].strip():
         lines.pop(0)
@@ -89,20 +109,18 @@ def get_output(session=None, window=None) -> str:
 def get_pane_preview(session: str, window: int, lines: int = 5) -> str:
     """Capture last N lines from a specific pane for preview."""
     target = f"{session}:{window}"
-    r = subprocess.run(
+    r = _run(
         ["tmux", "capture-pane", "-t", target, "-p", "-S", f"-{lines}"],
         capture_output=True, text=True,
     )
-    text = ANSI_RE.sub("", r.stdout)
-    text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]', '', text)
-    return text.strip()
+    return clean_terminal_text(r.stdout).strip()
 
 
 def detect_cc_status(text: str, activity_age: float = None) -> dict:
     """Detect if text is Claude Code output and its status.
     Returns dict with is_cc, status, context_pct, perm_mode.
     """
-    is_cc = '\u276f' in text and '\u23fa' in text
+    is_cc = '\u276f' in text and ('\u23fa' in text or bool(re.search(r'Claude Code v\d', text)))
     if not is_cc:
         return {"is_cc": False, "status": None, "context_pct": None, "perm_mode": None}
 
@@ -116,8 +134,8 @@ def detect_cc_status(text: str, activity_age: float = None) -> dict:
     has_working = False
     context_pct = None
     perm_mode = None
-    for line in lines[-3:]:
-        if '\u23f5' in line:
+    for line in reversed(lines[-5:]):
+        if line.lstrip().startswith('\u23f5'):
             if 'esc to interrupt' in line:
                 has_working = True
             # Context remaining: "Context left until auto-compact: 9%"
@@ -135,8 +153,8 @@ def detect_cc_status(text: str, activity_age: float = None) -> dict:
                     perm_mode = pm2.group(1).strip()
             break
 
-    # 2. Thinking: · at START of any line in last 20 lines
-    tail = '\n'.join(lines[-20:])
+    # 2. Thinking: · at START of any line in last 15 lines
+    tail = '\n'.join(lines[-15:])
     has_thinking = bool(re.search(r'^\u00b7', tail, re.MULTILINE))
 
     # --- Determine status ---
@@ -156,7 +174,7 @@ def get_dashboard() -> dict:
     """Get lightweight status for all sessions and windows."""
     now = time.time()
     # Single call to get all pane metadata including activity timestamp
-    r = subprocess.run(
+    r = _run(
         ["tmux", "list-panes", "-a", "-F",
          "#{session_name}\t#{window_index}\t#{window_name}\t#{pane_current_path}\t#{pane_current_command}\t#{window_active}\t#{session_attached}\t#{pane_pid}\t#{window_activity}"],
         capture_output=True, text=True,
@@ -203,7 +221,7 @@ def get_dashboard() -> dict:
 
 def list_sessions() -> list:
     """List all tmux sessions with their windows."""
-    r = subprocess.run(
+    r = _run(
         ["tmux", "list-sessions", "-F", "#{session_name} #{session_windows} #{session_attached}"],
         capture_output=True, text=True,
     )
@@ -214,7 +232,7 @@ def list_sessions() -> list:
         parts = line.split(" ", 2)
         name = parts[0]
         # Get windows for this session
-        wr = subprocess.run(
+        wr = _run(
             ["tmux", "list-windows", "-t", name, "-F", "#{window_index} #{window_name} #{window_active}"],
             capture_output=True, text=True,
         )
@@ -237,7 +255,7 @@ def list_sessions() -> list:
 
 
 def list_windows() -> list:
-    r = subprocess.run(
+    r = _run(
         ["tmux", "list-windows", "-t", _current_session, "-F", "#{window_index} #{window_name} #{window_active}"],
         capture_output=True, text=True,
     )
@@ -256,11 +274,11 @@ def list_windows() -> list:
 
 def new_window():
     work_dir = WORK_DIR if Path(WORK_DIR).is_dir() else str(Path.home())
-    subprocess.run(["tmux", "new-window", "-t", _current_session, "-c", work_dir])
+    _run(["tmux", "new-window", "-t", _current_session, "-c", work_dir])
 
 
 def select_window(index: int):
-    subprocess.run(["tmux", "select-window", "-t", f"{_current_session}:{index}"])
+    _run(["tmux", "select-window", "-t", f"{_current_session}:{index}"])
 
 
 HTML = """\
@@ -278,7 +296,8 @@ HTML = """\
   --bg: #191a1b; --bg2: #1e1f20; --surface: #232425;
   --border: rgba(255,255,255,0.07); --border2: rgba(255,255,255,0.12);
   --text: #e8e6e3; --text2: #8a8a8a; --text3: #5a5a5a;
-  --accent: #D97757; --accent2: #c4693e; --red: #e5534b;
+  --accent: #D97757; --accent2: #c4693e; --accent-dim: var(--accent-dim);
+  --accent-focus: var(--accent-focus); --red: #e5534b;
   --green: #3fb950; --orange: #d29922;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -332,14 +351,13 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   border-radius:8px; cursor:pointer; transition:all .12s;
   -webkit-user-select:none; user-select:none; }
 .sb-win:hover { background:var(--surface); }
-.sb-win.active { background:rgba(217,119,87,0.08); }
+.sb-win.active { background:var(--accent-dim); }
 .sb-win.sb-drag-over { border-top:2px solid var(--accent); margin-top:-2px; }
 .sb-win.dragging { opacity:0.4; }
 .sb-win-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
 .sb-win-dot.idle { background:var(--green); }
 .sb-win-dot.working { background:var(--orange); animation:pulse 1.5s ease-in-out infinite; }
 .sb-win-dot.thinking { background:var(--orange); animation:pulse 1s ease-in-out infinite; }
-.sb-win-dot.waiting { background:var(--accent); animation:pulse 2s ease-in-out infinite; }
 .sb-win-dot.none { background:var(--text3); opacity:0.3; }
 .sb-win-info { flex:1; min-width:0; }
 .sb-win-name { font-size:12px; font-weight:500; color:var(--text);
@@ -349,7 +367,6 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .sb-win-status { font-size:10px; font-weight:500; color:var(--text3);
   white-space:nowrap; flex-shrink:0; text-align:right; min-width:50px; }
 .sb-win-status.working, .sb-win-status.thinking { color:var(--orange); }
-.sb-win-status.waiting { color:var(--accent); }
 .sb-win-status.idle { color:var(--green); }
 .sb-ctx { display:inline-block; font-size:9px; color:var(--text3); margin-left:4px; }
 .sb-ctx.low { color:var(--orange); font-weight:700; }
@@ -364,7 +381,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   max-width:180px; cursor:text; min-height:14px; }
 .sb-memo:empty::before { content:'+ note'; color:var(--text3); opacity:0.5;
   font-style:italic; }
-.sb-memo-edit { font-size:10px; color:var(--text); background:var(--surface2);
+.sb-memo-edit { font-size:10px; color:var(--text); background:var(--surface);
   border:1px solid var(--accent); border-radius:4px; padding:2px 4px;
   width:100%; margin-top:2px; outline:none; font-family:inherit; }
 .sb-win-detail-btn { background:none; border:none; color:var(--text3);
@@ -381,7 +398,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 @media (max-width:768px) {
   #sidebar { position:fixed; left:0; top:0; bottom:0; z-index:20;
     transform:translateX(-100%); transition:transform .25s ease;
-    width:280px; }
+    width:var(--sidebar-w); min-width:260px; }
   #sidebar.open { transform:translateX(0); }
   #sidebar.collapsed { transform:translateX(-100%); }
   #sidebar-backdrop.open { display:block; }
@@ -422,13 +439,17 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .pane-stack:last-child { border-right:none; }
 .pane-stack > .pane { border-right:none; border-bottom:none; flex:1; }
 #sidebar-resize { width:4px; flex-shrink:0; cursor:col-resize; background:transparent;
-  transition:background .15s; z-index:3; }
+  transition:background .15s; z-index:3; position:relative; }
+#sidebar-resize::after { content:''; position:absolute; top:0; bottom:0; left:-6px; right:-6px; }
 #sidebar-resize:hover, #sidebar-resize.active { background:var(--accent); }
 @media (max-width:768px) { #sidebar-resize { display:none; } }
 
-.pane-divider { flex-shrink:0; background:var(--border2); transition:background .15s; z-index:2; }
+.pane-divider { flex-shrink:0; background:var(--border2); transition:background .15s; z-index:2; position:relative; }
 .pane-divider.col { width:4px; cursor:col-resize; }
 .pane-divider.row { height:4px; cursor:row-resize; }
+.pane-divider::after { content:''; position:absolute; z-index:1; }
+.pane-divider.col::after { top:0; bottom:0; left:-8px; right:-8px; }
+.pane-divider.row::after { left:0; right:0; top:-8px; bottom:-8px; }
 .pane-divider:hover, .pane-divider.active { background:var(--accent); }
 .drop-indicator { position:absolute; left:0; right:0; pointer-events:none;
   background:rgba(217,119,87,0.15); border:2px solid var(--accent);
@@ -452,7 +473,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .pane-tab.drag-over-tab { border-color:var(--accent); }
 .pane-tab-name { overflow:hidden; text-overflow:ellipsis; }
 .pane-tab-close { display:flex; align-items:center; justify-content:center;
-  width:14px; height:14px; border-radius:3px; font-size:12px; line-height:1;
+  width:20px; height:20px; border-radius:4px; font-size:12px; line-height:1;
   color:var(--text3); cursor:pointer; transition:all .1s; }
 .pane-tab-close:hover { background:rgba(255,255,255,0.1); color:var(--text); }
 .pane-close-btn { background:none; border:none; color:var(--text3);
@@ -499,7 +520,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   flex-shrink:0; border-radius:3px; font-weight:600; letter-spacing:0.5px; }
 .pane-queue-btn:hover { color:var(--accent); background:rgba(255,255,255,0.05); }
 .pane-queue-btn.active { color:var(--accent); }
-.pane-queue-btn.playing { color:#4ecf6a; }
+.pane-queue-btn.playing { color:var(--green); }
 .pane-refresh-btn { background:none; border:none; color:var(--text3);
   font-size:14px; cursor:pointer; padding:2px 6px; border-radius:4px; flex-shrink:0; }
 .pane-refresh-btn:hover { color:var(--accent); background:rgba(255,255,255,0.05); }
@@ -516,7 +537,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .queue-play-btn { background:none; border:none; cursor:pointer;
   font-size:14px; padding:0 4px; color:var(--text3); }
 .queue-play-btn:hover { color:var(--text); }
-.queue-play-btn.playing { color:#4ecf6a; }
+.queue-play-btn.playing { color:var(--green); }
 .queue-close { background:none; border:none; color:var(--text3); cursor:pointer;
   font-size:14px; padding:0 4px; margin-left:auto; }
 .queue-close:hover { color:var(--text); }
@@ -527,7 +548,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   transform:translate(-50%,-50%); width:32px; height:3px; border-radius:2px; background:var(--border2); }
 .queue-item { display:flex; align-items:center; gap:6px; padding:6px 8px 6px 4px;
   font-size:13px; color:var(--text); border-left:3px solid transparent; position:relative; }
-.queue-item.current { border-left-color:var(--accent); background:rgba(217,119,87,0.08); }
+.queue-item.current { border-left-color:var(--accent); background:var(--accent-dim); }
 .queue-item.done { opacity:0.45; }
 .queue-tabs { display:flex; gap:0; flex-shrink:0; }
 .queue-tab { flex:1; background:none; border:none; border-bottom:2px solid transparent;
@@ -557,7 +578,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   font-size:13px; font-family:inherit; outline:none; resize:none;
   line-height:1.4; min-height:30px; max-height:80px; overflow-y:auto; }
 .queue-add textarea::placeholder { color:var(--text3); }
-.queue-add textarea:focus { border-color:rgba(217,119,87,0.5); }
+.queue-add textarea:focus { border-color:var(--accent-focus); }
 .queue-add button { background:var(--accent); color:#fff; border:none;
   border-radius:8px; padding:6px 10px; font-size:13px; font-weight:600;
   cursor:pointer; flex-shrink:0; }
@@ -580,7 +601,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   font-size:var(--text-size); font-family:inherit; outline:none; resize:none;
   overflow-y:auto; max-height:40vh; line-height:1.4; }
 .pane-input textarea::placeholder { color:var(--text3); }
-.pane-input textarea:focus { border-color:rgba(217,119,87,0.5); }
+.pane-input textarea:focus { border-color:var(--accent-focus); }
 .pane-input .pane-send { flex-shrink:0; width:32px; height:32px; border-radius:50%;
   background:var(--accent); border:none; color:#fff; cursor:pointer;
   display:flex; align-items:center; justify-content:center; }
@@ -681,7 +702,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   resize:none; overflow-y:auto; max-height:40vh;
   line-height:1.4; }
 #msg::placeholder { color:var(--text3); }
-#msg:focus { border-color:rgba(217,119,87,0.5);
+#msg:focus { border-color:var(--accent-focus);
   box-shadow:0 0 0 3px rgba(217,119,87,0.1); }
 #send-btn { flex-shrink:0; width:40px; height:40px; border-radius:50%;
   background:var(--accent); border:none; color:#fff; cursor:pointer;
@@ -726,7 +747,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 #wd-rename-input { flex:1; background:var(--surface); color:var(--text);
   border:1px solid var(--border2); border-radius:8px; padding:8px 12px;
   font-size:13px; font-family:inherit; outline:none; }
-#wd-rename-input:focus { border-color:rgba(217,119,87,0.5); }
+#wd-rename-input:focus { border-color:var(--accent-focus); }
 .wd-save-btn { padding:8px 16px; background:var(--accent); color:#fff;
   border:none; border-radius:8px; font-size:13px; font-weight:500;
   font-family:inherit; cursor:pointer; }
@@ -1445,6 +1466,7 @@ function moveTabToPane(tabId, targetPaneId) {
   focusPane(targetPaneId);
   renderPaneTabs(targetPaneId);
   showActiveTabOutput(targetPaneId);
+  updateQueueContent(targetPaneId);
   renderSidebar();
   updatePolling();
   saveLayout();
@@ -1994,6 +2016,7 @@ function pauseQueue(tabId) {
   if (!qs) return;
   qs.playing = false;
   if (qs.idleTimer) { clearTimeout(qs.idleTimer); qs.idleTimer = null; }
+  saveQueue(tabId);
   // Re-render in the pane that has this tab
   for (const p of panes) {
     if (p.activeTabId === tabId) { renderQueuePanel(p.id); renderPaneTabs(p.id); break; }
@@ -2010,7 +2033,7 @@ function scheduleQueueCheck(tabId) {
   }, 2000);
 }
 
-function tryDispatchNext(tabId) {
+async function tryDispatchNext(tabId) {
   const qs = _queueStates[tabId];
   if (!qs || !qs.playing) return;
   const state = tabStates[tabId];
@@ -2036,10 +2059,12 @@ function tryDispatchNext(tabId) {
   state.pendingMsg = text; state.pendingTime = Date.now(); state.awaitingResponse = true;
   const outEl = document.getElementById('tab-output-' + tabId);
   if (outEl) { renderOutput(state.rawContent || state.last, outEl, state, tabId); outEl.scrollTop = outEl.scrollHeight; }
-  fetch('/api/send', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ cmd: text, session: tab.session, window: tab.windowIndex })
-  });
+  try {
+    await fetch('/api/send', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ cmd: text, session: tab.session, window: tab.windowIndex })
+    });
+  } catch(e) { pauseQueue(tabId); }
   for (const p of panes) {
     if (p.activeTabId === tabId) { renderQueuePanel(p.id); break; }
   }
@@ -2223,10 +2248,12 @@ async function sendToPane(paneId) {
   if (qs && qs.playing) pauseQueue(pane.activeTabId);
   const outEl = document.getElementById('tab-output-' + pane.activeTabId);
   if (outEl) { renderOutput(state.rawContent || state.last, outEl, state, pane.activeTabId); outEl.scrollTop = outEl.scrollHeight; }
-  await fetch('/api/send', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ cmd: text, session: tab.session, window: tab.windowIndex })
-  });
+  try {
+    await fetch('/api/send', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ cmd: text, session: tab.session, window: tab.windowIndex })
+    });
+  } catch(e) {}
 }
 
 async function sendGlobal() {
@@ -2239,15 +2266,17 @@ async function sendGlobal() {
   if (qsg && qsg.playing) pauseQueue(active.tabId);
   const outEl = document.getElementById('tab-output-' + active.tabId);
   if (outEl) { renderOutput(active.state.rawContent || active.state.last, outEl, active.state, active.tabId); outEl.scrollTop = outEl.scrollHeight; }
-  await fetch('/api/send', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ cmd: text, session: active.tab.session, window: active.tab.windowIndex })
-  });
+  try {
+    await fetch('/api/send', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ cmd: text, session: active.tab.session, window: active.tab.windowIndex })
+    });
+  } catch(e) {}
 }
 
 async function keyActive(k) {
   const active = getActiveTab(); if (!active) return;
-  await fetch('/api/key/' + k + '?session=' + encodeURIComponent(active.tab.session) + '&window=' + active.tab.windowIndex);
+  try { await fetch('/api/key/' + k + '?session=' + encodeURIComponent(active.tab.session) + '&window=' + active.tab.windowIndex); } catch(e) {}
 }
 
 function prefill(text) { M.value = M.value ? M.value + ' ' + text : text; M.focus(); }
@@ -2256,10 +2285,12 @@ async function sendResumeActive() {
   const active = getActiveTab(); if (!active) return;
   active.state.rawMode = true;
   document.getElementById('view-label').textContent = 'Raw';
-  await fetch('/api/send', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ cmd: '/resume', session: active.tab.session, window: active.tab.windowIndex })
-  });
+  try {
+    await fetch('/api/send', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ cmd: '/resume', session: active.tab.session, window: active.tab.windowIndex })
+    });
+  } catch(e) {}
 }
 
 function toggleKeys() {
@@ -2576,7 +2607,7 @@ function saveWDRename() {
   fetch('/api/windows/' + _wdWindow, {
     method:'PUT', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({name: name, session: _wdSession})
-  }).then(() => {
+  }).catch(() => {}).then(() => {
     // Update tab name if open
     for (const tid in allTabs) {
       const t = allTabs[tid];
@@ -2595,7 +2626,7 @@ function saveWDRename() {
 function closeWDWindow() {
   if (!_wdSession || _wdWindow === null) return;
   if (!confirm('Close this window?')) return;
-  fetch('/api/windows/' + _wdWindow + '?session=' + encodeURIComponent(_wdSession), {method:'DELETE'}).then(() => {
+  fetch('/api/windows/' + _wdWindow + '?session=' + encodeURIComponent(_wdSession), {method:'DELETE'}).catch(() => {}).then(() => {
     // Close tab if open
     for (const tid in allTabs) {
       const t = allTabs[tid];
@@ -2637,7 +2668,7 @@ async function loadDashboard() {
 }
 
 async function newWin() {
-  await fetch('/api/windows/new', {method:'POST'});
+  try { await fetch('/api/windows/new', {method:'POST'}); } catch(e) { return; }
   await loadDashboard();
   if (_dashboardData) {
     let sessName = null;
@@ -2755,8 +2786,39 @@ function restoreLayout() {
   } catch(e) { _restoringLayout = false; return false; }
 }
 
+function cleanupStaleStorage() {
+  // Remove localStorage keys for windows/sessions that no longer exist
+  if (!_dashboardData) return;
+  const validKeys = new Set();
+  for (const s of _dashboardData.sessions) {
+    for (const w of s.windows) validKeys.add(s.name + ':' + w.index);
+  }
+  const prefixes = ['notepad:', 'memo:', 'queue:'];
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      for (const pfx of prefixes) {
+        if (key && key.startsWith(pfx)) {
+          const rest = key.slice(pfx.length);
+          if (!validKeys.has(rest)) localStorage.removeItem(key);
+        }
+      }
+    }
+    // Prune sidebar order: remove deleted sessions/windows
+    if (_sidebarOrder.sessions.length) {
+      const validSessions = new Set(_dashboardData.sessions.map(s => s.name));
+      _sidebarOrder.sessions = _sidebarOrder.sessions.filter(s => validSessions.has(s));
+      for (const sn in _sidebarOrder.windows) {
+        if (!validSessions.has(sn)) delete _sidebarOrder.windows[sn];
+      }
+      saveSidebarOrder();
+    }
+  } catch(e) {}
+}
+
 async function init() {
   await loadDashboard();
+  cleanupStaleStorage();
   if (!restoreLayout()) {
     createPane();
     if (_dashboardData && _dashboardData.sessions.length > 0) {
@@ -2765,8 +2827,19 @@ async function init() {
       if (activeWin) createTab(sess.name, activeWin.index, activeWin.name);
     }
   }
-  setInterval(loadDashboard, 3000);
+  setInterval(() => { if (!document.hidden) loadDashboard(); }, 3000);
 }
+// Pause/resume polling when page visibility changes
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    // Stop all tab polls when page is hidden
+    for (const tid in tabStates) stopTabPolling(parseInt(tid));
+  } else {
+    // Resume visible tab polls + refresh dashboard
+    updatePolling();
+    loadDashboard();
+  }
+});
 init();
 </script>
 </body>
@@ -2831,17 +2904,17 @@ async def api_rename_current_window(body: dict):
     name = body.get("name", "").strip()
     if name:
         target = _current_session
-        subprocess.run(["tmux", "rename-window", "-t", target, name])
-        subprocess.run(["tmux", "set-window-option", "-t", target, "allow-rename", "off"])
-        subprocess.run(["tmux", "set-window-option", "-t", target, "automatic-rename", "off"])
+        _run(["tmux", "rename-window", "-t", target, name])
+        _run(["tmux", "set-window-option", "-t", target, "allow-rename", "off"])
+        _run(["tmux", "set-window-option", "-t", target, "automatic-rename", "off"])
     return JSONResponse({"ok": True})
 
 
 @app.post("/api/windows/current/reset-name")
 async def api_reset_window_name():
     target = _current_session
-    subprocess.run(["tmux", "set-window-option", "-t", target, "automatic-rename", "on"])
-    subprocess.run(["tmux", "set-window-option", "-t", target, "allow-rename", "on"])
+    _run(["tmux", "set-window-option", "-t", target, "automatic-rename", "on"])
+    _run(["tmux", "set-window-option", "-t", target, "allow-rename", "on"])
     return JSONResponse({"ok": True})
 
 
@@ -2851,16 +2924,16 @@ async def api_rename_window(index: int, body: dict):
     session = body.get("session", _current_session)
     if name:
         target = f"{session}:{index}"
-        subprocess.run(["tmux", "rename-window", "-t", target, name])
-        subprocess.run(["tmux", "set-window-option", "-t", target, "allow-rename", "off"])
-        subprocess.run(["tmux", "set-window-option", "-t", target, "automatic-rename", "off"])
+        _run(["tmux", "rename-window", "-t", target, name])
+        _run(["tmux", "set-window-option", "-t", target, "allow-rename", "off"])
+        _run(["tmux", "set-window-option", "-t", target, "automatic-rename", "off"])
     return JSONResponse({"ok": True})
 
 
 @app.delete("/api/windows/{index}")
 async def api_close_window(index: int, session: str = None):
     sess = session or _current_session
-    subprocess.run(["tmux", "kill-window", "-t", f"{sess}:{index}"])
+    _run(["tmux", "kill-window", "-t", f"{sess}:{index}"])
     return JSONResponse({"ok": True})
 
 
@@ -2874,7 +2947,7 @@ async def api_sessions():
 
 @app.get("/api/pane-info")
 async def api_pane_info():
-    r = subprocess.run(
+    r = _run(
         ["tmux", "display-message", "-t", _current_session, "-p",
          "#{pane_current_path}\n#{pane_pid}\n#{window_name}\n#{session_name}"],
         capture_output=True, text=True,
@@ -2892,7 +2965,7 @@ async def api_pane_info():
 async def api_switch_session(name: str):
     global _current_session
     # Verify session exists
-    r = subprocess.run(["tmux", "has-session", "-t", name], capture_output=True)
+    r = _run(["tmux", "has-session", "-t", name], capture_output=True)
     if r.returncode != 0:
         return JSONResponse({"ok": False, "error": "Session not found"}, status_code=404)
     _current_session = name
@@ -2904,10 +2977,10 @@ async def api_rename_session(name: str, body: dict):
     new_name = body.get("name", "").strip()
     if not new_name:
         return JSONResponse({"ok": False, "error": "Name required"}, status_code=400)
-    r = subprocess.run(["tmux", "has-session", "-t", name], capture_output=True)
+    r = _run(["tmux", "has-session", "-t", name], capture_output=True)
     if r.returncode != 0:
         return JSONResponse({"ok": False, "error": "Session not found"}, status_code=404)
-    subprocess.run(["tmux", "rename-session", "-t", name, new_name])
+    _run(["tmux", "rename-session", "-t", name, new_name])
     global _current_session
     if _current_session == name:
         _current_session = new_name
