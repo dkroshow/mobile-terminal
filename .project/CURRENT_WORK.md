@@ -30,6 +30,10 @@
 ## Recently Completed (cont. 2)
 - **2026-02-12**: Task Queue — per-pane "QUEUE" button (next to NOTES) opens dropdown panel. Add tasks as list items, play/pause toggle auto-dispatches to CC session as it goes idle (2s buffer). Tasks get strikethrough when done, X to remove. Auto-pauses on manual send. localStorage persistence (`queue:session:windowIndex`), play state resets to paused on reload. No backend changes — entirely client-side using existing `/api/send` and `awaitingResponse` idle detection.
 
+## Recently Completed (cont. 3)
+- **2026-02-12**: Sidebar resize — draggable 4px handle between sidebar and main area (col-resize cursor, accent highlight on hover/drag). Width persisted to `localStorage sidebar:width`. Hidden on mobile and when sidebar collapsed.
+- **2026-02-12**: Task Queue enhancements — dispatched tasks prepend "please execute this task: "; drag reorder via grip handles (pointer events, works on mobile); inline edit (click text to edit, Enter/Escape/blur to save/cancel); re-render guard skips `renderQueuePanel` while `.qi-edit` input exists to prevent polling from destroying mid-edit.
+
 ## Active Work
 None
 

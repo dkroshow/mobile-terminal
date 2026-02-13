@@ -281,6 +281,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   transition:width .2s ease, min-width .2s ease; overflow:hidden;
   padding-top:var(--safe-top); }
 #sidebar.collapsed { width:0; min-width:0; border-right:none; }
+#sidebar.collapsed + #sidebar-resize { display:none; }
 #sidebar-header { padding:12px 14px 8px; display:flex; align-items:center;
   justify-content:space-between; flex-shrink:0; }
 #sidebar-header h2 { font-size:13px; font-weight:700; color:var(--text2);
@@ -383,6 +384,11 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   overflow:hidden; border-right:1px solid var(--border2); }
 .pane-stack:last-child { border-right:none; }
 .pane-stack > .pane { border-right:none; border-bottom:none; flex:1; }
+#sidebar-resize { width:4px; flex-shrink:0; cursor:col-resize; background:transparent;
+  transition:background .15s; z-index:3; }
+#sidebar-resize:hover, #sidebar-resize.active { background:var(--accent); }
+@media (max-width:768px) { #sidebar-resize { display:none; } }
+
 .pane-divider { flex-shrink:0; background:var(--border2); transition:background .15s; z-index:2; }
 .pane-divider.col { width:4px; cursor:col-resize; }
 .pane-divider.row { height:4px; cursor:row-resize; }
@@ -475,11 +481,21 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   font-size:14px; padding:0 4px; margin-left:auto; }
 .queue-close:hover { color:var(--text); }
 .queue-list { flex:1; overflow-y:auto; padding:4px 0; min-height:40px; max-height:260px; }
-.queue-item { display:flex; align-items:center; gap:8px; padding:6px 12px;
-  font-size:13px; color:var(--text); border-left:3px solid transparent; }
+.queue-item { display:flex; align-items:center; gap:6px; padding:6px 8px 6px 4px;
+  font-size:13px; color:var(--text); border-left:3px solid transparent; position:relative; }
 .queue-item.current { border-left-color:var(--accent); background:rgba(217,119,87,0.08); }
 .queue-item.done { text-decoration:line-through; opacity:0.45; }
-.queue-item-text { flex:1; word-break:break-word; line-height:1.4; }
+.queue-item.qi-dragging { opacity:0.3; }
+.queue-item.qi-over { box-shadow:0 -2px 0 var(--accent); }
+.qi-grip { cursor:grab; color:var(--text3); font-size:11px; padding:4px 2px;
+  flex-shrink:0; touch-action:none; user-select:none; line-height:1; }
+.qi-grip:active { cursor:grabbing; }
+.queue-item-text { flex:1; word-break:break-word; line-height:1.4; cursor:text; border-radius:4px;
+  padding:1px 4px; margin:-1px -4px; }
+.queue-item-text:hover { background:rgba(255,255,255,0.04); }
+.qi-edit { flex:1; background:var(--surface); color:var(--text); border:1px solid var(--accent);
+  border-radius:6px; padding:4px 8px; font-size:13px; font-family:inherit; outline:none;
+  line-height:1.4; min-width:0; }
 .queue-item-remove { background:none; border:none; color:var(--text3); cursor:pointer;
   font-size:14px; padding:0 4px; flex-shrink:0; }
 .queue-item-remove:hover { color:var(--red); }
@@ -681,6 +697,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
     <button id="new-win-btn" onclick="newWin()">+ New Window</button>
   </div>
 </aside>
+<div id="sidebar-resize"></div>
 <div id="sidebar-backdrop" onclick="closeMobileSidebar()"></div>
 
 <main id="main">
@@ -1496,6 +1513,7 @@ function renderQueuePanel(paneId) {
   if (!paneEl) return;
   const panel = paneEl.querySelector('.queue-panel');
   if (!panel) return;
+  if (panel.querySelector('.qi-edit')) return;
   const qs = getQueueState(pane.activeTabId);
   const undone = qs.items.filter(i => !i.done).length;
   const total = qs.items.length;
@@ -1508,8 +1526,9 @@ function renderQueuePanel(paneId) {
   for (let i = 0; i < qs.items.length; i++) {
     const item = qs.items[i];
     const cls = (item.done ? ' done' : '') + (i === qs.currentIdx ? ' current' : '');
-    html += '<div class="queue-item' + cls + '">'
-      + '<span class="queue-item-text">' + esc(item.text) + '</span>'
+    html += '<div class="queue-item' + cls + '" data-qi="' + i + '">'
+      + '<span class="qi-grip" data-qi-grip="' + i + '">&#9776;</span>'
+      + '<span class="queue-item-text" onclick="editQueueItem(' + pane.activeTabId + ',' + i + ',this)">' + esc(item.text) + '</span>'
       + '<button class="queue-item-remove" onclick="removeQueueItem(' + pane.activeTabId + ',' + i + ')">&times;</button>'
       + '</div>';
   }
@@ -1521,6 +1540,75 @@ function renderQueuePanel(paneId) {
     + '<button onclick="addQueueItem(' + paneId + ')">+</button>'
     + '</div>';
   panel.innerHTML = html;
+  setupQueueDrag(paneId, panel);
+}
+
+function setupQueueDrag(paneId, panel) {
+  const pane = panes.find(p => p.id === paneId);
+  if (!pane || !pane.activeTabId) return;
+  const tabId = pane.activeTabId;
+  const list = panel.querySelector('.queue-list');
+  if (!list) return;
+  let dragIdx = null, overIdx = null;
+
+  list.addEventListener('pointerdown', e => {
+    const grip = e.target.closest('[data-qi-grip]');
+    if (!grip) return;
+    e.preventDefault();
+    dragIdx = parseInt(grip.dataset.qiGrip);
+    const dragEl = list.querySelector('[data-qi="' + dragIdx + '"]');
+    if (dragEl) dragEl.classList.add('qi-dragging');
+    grip.setPointerCapture(e.pointerId);
+
+    function getOverIdx(ev) {
+      const items = [...list.querySelectorAll('.queue-item')];
+      for (const it of items) {
+        const r = it.getBoundingClientRect();
+        if (ev.clientY < r.top + r.height / 2) return parseInt(it.dataset.qi);
+      }
+      return items.length > 0 ? parseInt(items[items.length - 1].dataset.qi) + 1 : 0;
+    }
+
+    function onMove(ev) {
+      const newOver = getOverIdx(ev);
+      if (newOver !== overIdx) {
+        list.querySelectorAll('.qi-over').forEach(el => el.classList.remove('qi-over'));
+        overIdx = newOver;
+        const target = list.querySelector('[data-qi="' + overIdx + '"]');
+        if (target && overIdx !== dragIdx && overIdx !== dragIdx + 1) target.classList.add('qi-over');
+      }
+    }
+
+    function onUp() {
+      list.querySelectorAll('.qi-dragging,.qi-over').forEach(el => el.classList.remove('qi-dragging', 'qi-over'));
+      if (dragIdx !== null && overIdx !== null && overIdx !== dragIdx && overIdx !== dragIdx + 1) {
+        const qs = _queueStates[tabId];
+        if (qs) {
+          const [moved] = qs.items.splice(dragIdx, 1);
+          const insertAt = overIdx > dragIdx ? overIdx - 1 : overIdx;
+          qs.items.splice(insertAt, 0, moved);
+          // Adjust currentIdx
+          if (qs.currentIdx !== null) {
+            if (qs.currentIdx === dragIdx) qs.currentIdx = insertAt;
+            else {
+              if (dragIdx < qs.currentIdx && insertAt >= qs.currentIdx) qs.currentIdx--;
+              else if (dragIdx > qs.currentIdx && insertAt <= qs.currentIdx) qs.currentIdx++;
+            }
+          }
+          saveQueue(tabId);
+          renderQueuePanel(paneId);
+        }
+      }
+      dragIdx = null; overIdx = null;
+      grip.removeEventListener('pointermove', onMove);
+      grip.removeEventListener('pointerup', onUp);
+      grip.removeEventListener('pointercancel', onUp);
+    }
+
+    grip.addEventListener('pointermove', onMove);
+    grip.addEventListener('pointerup', onUp);
+    grip.addEventListener('pointercancel', onUp);
+  });
 }
 
 function addQueueItem(paneId) {
@@ -1554,6 +1642,33 @@ function removeQueueItem(tabId, idx) {
   for (const p of panes) {
     if (p.activeTabId === tabId) { renderQueuePanel(p.id); break; }
   }
+}
+
+function editQueueItem(tabId, idx, span) {
+  const qs = _queueStates[tabId];
+  if (!qs || idx < 0 || idx >= qs.items.length) return;
+  const item = qs.items[idx];
+  const inp = document.createElement('input');
+  inp.className = 'qi-edit';
+  inp.value = item.text;
+  span.replaceWith(inp);
+  inp.focus();
+  inp.select();
+  function save() {
+    const text = inp.value.trim();
+    if (text && text !== item.text) {
+      item.text = text;
+      saveQueue(tabId);
+    }
+    for (const p of panes) {
+      if (p.activeTabId === tabId) { renderQueuePanel(p.id); break; }
+    }
+  }
+  inp.addEventListener('blur', save);
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); inp.blur(); }
+    if (e.key === 'Escape') { inp.value = item.text; inp.blur(); }
+  });
 }
 
 function toggleQueuePlay(paneId) {
@@ -1618,7 +1733,7 @@ function tryDispatchNext(tabId) {
     return;
   }
   qs.currentIdx = nextIdx;
-  const text = qs.items[nextIdx].text;
+  const text = 'please execute this task: ' + qs.items[nextIdx].text;
   state.pendingMsg = text; state.pendingTime = Date.now(); state.awaitingResponse = true;
   const outEl = document.getElementById('tab-output-' + tabId);
   if (outEl) { renderOutput(state.rawContent || state.last, outEl, state, tabId); outEl.scrollTop = outEl.scrollHeight; }
@@ -1889,6 +2004,37 @@ function closeMobileSidebar() {
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('sidebar-backdrop').classList.remove('open');
 }
+
+// --- Sidebar resize ---
+(function() {
+  const handle = document.getElementById('sidebar-resize');
+  const sidebar = document.getElementById('sidebar');
+  let startX, startW;
+  const saved = localStorage.getItem('sidebar:width');
+  if (saved) document.documentElement.style.setProperty('--sidebar-w', saved + 'px');
+  handle.addEventListener('pointerdown', e => {
+    if (_sidebarCollapsed) return;
+    e.preventDefault();
+    handle.classList.add('active');
+    startX = e.clientX;
+    startW = sidebar.getBoundingClientRect().width;
+    sidebar.style.transition = 'none';
+    function onMove(ev) {
+      const w = Math.max(160, Math.min(500, startW + ev.clientX - startX));
+      document.documentElement.style.setProperty('--sidebar-w', w + 'px');
+    }
+    function onUp(ev) {
+      handle.classList.remove('active');
+      sidebar.style.transition = '';
+      const w = Math.max(160, Math.min(500, startW + ev.clientX - startX));
+      localStorage.setItem('sidebar:width', w);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+    }
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+  });
+})();
 
 let _sidebarOrder = { sessions: [], windows: {} };
 try { const so = JSON.parse(localStorage.getItem('sidebar:order')); if (so) _sidebarOrder = so; } catch(e) {}
