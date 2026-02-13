@@ -43,6 +43,14 @@
 - **2026-02-12**: Sidebar text labels removed — "Working"/"Standby"/"Thinking" labels dropped, dots-only for status. Context % still shown when available.
 - **2026-02-12**: CC session boundary detection — `parseCCTurns()` finds last `Claude Code vX.X.X` banner in terminal output and only parses from the first `❯` after it. Fixes wonky formatting when CC restarts, after `/clear`, or when shell output (banner, "Resume this session", prompt) is mixed in.
 
+## Recently Completed (cont. 5)
+- **2026-02-12**: Queue Active/Past split — completed tasks move to "Completed (N)" section below active tasks. No strikethrough; dimmed with remove-only (no grip/edit). Active section retains full functionality.
+- **2026-02-12**: QUEUE button remaining count — shows "QUEUE N" (undone count) when panel is collapsed. Updates on add/remove/complete.
+- **2026-02-12**: Phantom text fix — `pendingMsg` was being cleared too aggressively on any output change. Now only clears via substring match against all parsed user turns or 10s timeout.
+- **2026-02-12**: Hard refresh button — `↻` in pane tab bar. Clears cached state (`last`, `rawContent`, `pendingMsg`, `awaitingResponse`) and forces fresh fetch+render.
+- **2026-02-12**: Desktop keyboard forwarding — when textarea is empty, Arrow Up/Down → tmux Up/Down, Enter → tmux Enter, Escape → tmux Escape, Tab → tmux Tab. Enables plan mode / interactive prompt navigation from desktop keyboard.
+- **2026-02-12**: Large text input fix — textarea max-height 80px/120px → 40vh with `overflow-y:auto` scrolling. Backend `paste-buffer` uses `-p` (bracketed paste) so multiline text isn't split into separate inputs by CC's TUI.
+
 ## Active Work
 None
 

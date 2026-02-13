@@ -53,10 +53,11 @@ def send_keys(text: str, session=None, window=None):
     # Clear any existing input on the line before sending (Ctrl-U + Ctrl-K)
     subprocess.run(["tmux", "send-keys", "-t", target, "C-u"])
     # For large text, use set-buffer + paste-buffer for reliable delivery
+    # -p enables bracketed paste so TUI apps (CC) treat it as a single paste, not line-by-line input
     if len(text) > 500 or '\n' in text:
         buf_name = "_mt_paste"
         subprocess.run(["tmux", "set-buffer", "-b", buf_name, text])
-        subprocess.run(["tmux", "paste-buffer", "-d", "-b", buf_name, "-t", target])
+        subprocess.run(["tmux", "paste-buffer", "-d", "-p", "-b", buf_name, "-t", target])
         subprocess.run(["tmux", "send-keys", "-t", target, "Enter"])
     else:
         subprocess.run(["tmux", "send-keys", "-t", target, "-l", text])
@@ -486,6 +487,9 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .pane-queue-btn:hover { color:var(--accent); background:rgba(255,255,255,0.05); }
 .pane-queue-btn.active { color:var(--accent); }
 .pane-queue-btn.playing { color:#4ecf6a; }
+.pane-refresh-btn { background:none; border:none; color:var(--text3);
+  font-size:14px; cursor:pointer; padding:2px 6px; border-radius:4px; flex-shrink:0; }
+.pane-refresh-btn:hover { color:var(--accent); background:rgba(255,255,255,0.05); }
 .queue-panel { position:absolute; top:30px; right:0; z-index:10;
   width:min(480px, 95%); max-height:70%; background:var(--bg2);
   border:1px solid var(--border2); border-radius:0 0 0 12px;
@@ -511,7 +515,9 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .queue-item { display:flex; align-items:center; gap:6px; padding:6px 8px 6px 4px;
   font-size:13px; color:var(--text); border-left:3px solid transparent; position:relative; }
 .queue-item.current { border-left-color:var(--accent); background:rgba(217,119,87,0.08); }
-.queue-item.done { text-decoration:line-through; opacity:0.45; }
+.queue-item.done { opacity:0.45; }
+.queue-section { font-size:10px; font-weight:600; color:var(--text3); text-transform:uppercase;
+  letter-spacing:0.5px; padding:6px 10px 2px; }
 .queue-item.qi-dragging { opacity:0.3; }
 .queue-item.qi-over { box-shadow:0 -2px 0 var(--accent); }
 .qi-grip { cursor:grab; color:var(--text3); font-size:11px; padding:4px 2px;
@@ -555,7 +561,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .pane-input textarea { flex:1; background:var(--surface); color:var(--text);
   border:1px solid var(--border2); border-radius:16px; padding:8px 14px;
   font-size:var(--text-size); font-family:inherit; outline:none; resize:none;
-  overflow-y:hidden; max-height:80px; line-height:1.4; }
+  overflow-y:auto; max-height:40vh; line-height:1.4; }
 .pane-input textarea::placeholder { color:var(--text3); }
 .pane-input textarea:focus { border-color:rgba(217,119,87,0.5); }
 .pane-input .pane-send { flex-shrink:0; width:32px; height:32px; border-radius:50%;
@@ -655,7 +661,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   border:1px solid var(--border2); border-radius:22px; padding:10px 16px;
   font-size:var(--text-size); font-family:inherit; outline:none;
   transition:border-color .2s, box-shadow .2s;
-  resize:none; overflow-y:hidden; max-height:120px;
+  resize:none; overflow-y:auto; max-height:40vh;
   line-height:1.4; }
 #msg::placeholder { color:var(--text3); }
 #msg:focus { border-color:rgba(217,119,87,0.5);
@@ -1009,8 +1015,10 @@ function renderOutput(raw, targetEl, state, tabId) {
     const turns = parseCCTurns(clean);
     if (state.pendingMsg) {
       const userTurns = turns.filter(t => t.role === 'user');
-      const lastUser = userTurns[userTurns.length - 1];
-      if (lastUser && lastUser.lines.join(' ').includes(state.pendingMsg.substring(0, 20)))
+      const anyMatch = userTurns.some(u => u.lines.join(' ').includes(state.pendingMsg.substring(0, 20)));
+      if (anyMatch) state.pendingMsg = null;
+      // Safety timeout: 10s max for pendingMsg display
+      else if (state.pendingTime && (Date.now() - state.pendingTime) > 10000)
         state.pendingMsg = null;
     }
     const wasAwaiting = state.awaitingResponse;
@@ -1067,8 +1075,13 @@ function createPane(parentEl) {
   // Pane input handlers
   const ta = el.querySelector('.pane-input textarea');
   const sendBtn = el.querySelector('.pane-send');
-  ta.addEventListener('input', () => { ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,80)+'px'; });
-  ta.addEventListener('keydown', e => { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); sendToPane(id); } });
+  ta.addEventListener('input', () => { const max=window.innerHeight*0.4; ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,max)+'px'; ta.style.overflowY=ta.scrollHeight>max?'auto':'hidden'; });
+  ta.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (ta.value.trim()) sendToPane(id); else keyActive('Enter'); }
+    if (!ta.value && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); keyActive(e.key === 'ArrowUp' ? 'Up' : 'Down'); }
+    if (!ta.value && e.key === 'Escape') { e.preventDefault(); keyActive('Escape'); }
+    if (!ta.value && e.key === 'Tab') { e.preventDefault(); keyActive('Tab'); }
+  });
   sendBtn.addEventListener('click', () => sendToPane(id));
   // Click anywhere on pane to focus it
   el.addEventListener('mousedown', () => focusPane(id));
@@ -1346,7 +1359,9 @@ function renderPaneTabs(paneId) {
     const qs = _queueStates[pane.activeTabId];
     const qOpen = paneEl.querySelector('.queue-panel.open');
     const qPlaying = qs && qs.playing;
-    html += '<button class="pane-queue-btn' + (qOpen ? ' active' : '') + (qPlaying ? ' playing' : '') + '" onclick="toggleQueue(' + paneId + ')" title="Task Queue">QUEUE</button>';
+    const qRemaining = qs ? qs.items.filter(i => !i.done).length : 0;
+    html += '<button class="pane-queue-btn' + (qOpen ? ' active' : '') + (qPlaying ? ' playing' : '') + '" onclick="toggleQueue(' + paneId + ')" title="Task Queue">QUEUE' + (qRemaining > 0 ? ' ' + qRemaining : '') + '</button>';
+    html += '<button class="pane-refresh-btn" onclick="hardRefresh(' + paneId + ')" title="Refresh">&#x21bb;</button>';
   }
   // Close pane button (only if >1 pane)
   if (panes.length > 1) {
@@ -1585,17 +1600,30 @@ function renderQueuePanel(paneId) {
     + '<span>Queue' + (total ? ' (' + undone + '/' + total + ')' : '') + '</span>'
     + '<button class="queue-close" onclick="toggleQueue(' + paneId + ')">&times;</button>'
     + '</div><div class="queue-list">';
+  const active = [], past = [];
   for (let i = 0; i < qs.items.length; i++) {
+    if (qs.items[i].done) past.push(i); else active.push(i);
+  }
+  if (!active.length && !past.length) {
+    html += '<div style="padding:16px 12px;color:var(--text3);font-size:12px;text-align:center;">No tasks yet</div>';
+  }
+  for (const i of active) {
     const item = qs.items[i];
-    const cls = (item.done ? ' done' : '') + (i === qs.currentIdx ? ' current' : '');
+    const cls = i === qs.currentIdx ? ' current' : '';
     html += '<div class="queue-item' + cls + '" data-qi="' + i + '">'
       + '<span class="qi-grip" data-qi-grip="' + i + '">&#9776;</span>'
       + '<span class="queue-item-text" onclick="editQueueItem(' + pane.activeTabId + ',' + i + ',this)">' + esc(item.text) + '</span>'
       + '<button class="queue-item-remove" onclick="removeQueueItem(' + pane.activeTabId + ',' + i + ')">&times;</button>'
       + '</div>';
   }
-  if (!qs.items.length) {
-    html += '<div style="padding:16px 12px;color:var(--text3);font-size:12px;text-align:center;">No tasks yet</div>';
+  if (past.length) {
+    html += '<div class="queue-section">Completed (' + past.length + ')</div>';
+    for (const i of past) {
+      html += '<div class="queue-item done" data-qi="' + i + '">'
+        + '<span class="queue-item-text" style="cursor:default">' + esc(qs.items[i].text) + '</span>'
+        + '<button class="queue-item-remove" onclick="removeQueueItem(' + pane.activeTabId + ',' + i + ')">&times;</button>'
+        + '</div>';
+    }
   }
   html += '</div><div class="queue-add">'
     + '<textarea rows="1" placeholder="Add a task\\u2026" onkeydown="if(event.key===\\'Enter\\'&&!event.shiftKey){event.preventDefault();addQueueItem(' + paneId + ');}" oninput="this.style.height=\\'auto\\';this.style.height=Math.min(this.scrollHeight,80)+\\'px\\'"></textarea>'
@@ -1730,6 +1758,7 @@ function addQueueItem(paneId) {
   qs.items.push({ text: text, done: false });
   saveQueue(pane.activeTabId);
   renderQueuePanel(paneId);
+  renderPaneTabs(paneId);
   paneEl.querySelector('.queue-add textarea')?.focus();
 }
 
@@ -1745,7 +1774,7 @@ function removeQueueItem(tabId, idx) {
   saveQueue(tabId);
   // Re-render in the pane that has this tab
   for (const p of panes) {
-    if (p.activeTabId === tabId) { renderQueuePanel(p.id); break; }
+    if (p.activeTabId === tabId) { renderQueuePanel(p.id); renderPaneTabs(p.id); break; }
   }
 }
 
@@ -1960,6 +1989,25 @@ function stopTabPolling(tabId) {
   clearInterval(state.pollInterval);
   state.pollInterval = null;
 }
+async function hardRefresh(paneId) {
+  const pane = panes.find(p => p.id === paneId);
+  if (!pane || !pane.activeTabId) return;
+  const tabId = pane.activeTabId;
+  const tab = allTabs[tabId]; const state = tabStates[tabId];
+  if (!tab || !state) return;
+  // Clear all cached state
+  state.last = null; state.rawContent = null; state.pendingMsg = null;
+  state.awaitingResponse = false;
+  try {
+    const r = await fetch('/api/output?session=' + encodeURIComponent(tab.session) + '&window=' + tab.windowIndex);
+    const d = await r.json();
+    state.lastOutputChange = Date.now();
+    state.last = d.output; state.rawContent = d.output;
+    const outEl = document.getElementById('tab-output-' + tabId);
+    if (outEl) { renderOutput(d.output, outEl, state, tabId); outEl.scrollTop = outEl.scrollHeight; }
+  } catch(e) {}
+}
+
 async function pollTab(tabId) {
   const tab = allTabs[tabId]; const state = tabStates[tabId];
   if (!tab || !state) return;
@@ -2008,7 +2056,7 @@ async function sendToPane(paneId) {
   const ta = paneEl.querySelector('.pane-input textarea');
   if (!ta) return;
   const text = ta.value; if (!text) return;
-  ta.value = ''; ta.style.height = 'auto';
+  ta.value = ''; ta.style.height = 'auto'; ta.style.overflowY = 'hidden';
   const tab = allTabs[pane.activeTabId];
   const state = tabStates[pane.activeTabId];
   if (!tab || !state) return;
@@ -2027,7 +2075,7 @@ async function sendToPane(paneId) {
 async function sendGlobal() {
   const text = M.value; if (!text) return;
   const active = getActiveTab(); if (!active) return;
-  M.value = ''; M.style.height = 'auto';
+  M.value = ''; M.style.height = 'auto'; M.style.overflowY = 'hidden';
   active.state.pendingMsg = text; active.state.pendingTime = Date.now(); active.state.awaitingResponse = true;
   // Pause queue on manual send
   const qsg = _queueStates[active.tabId];
@@ -2436,13 +2484,17 @@ async function newWin() {
 
 // === Input ===
 function autoResize() {
+  const max = window.innerHeight * 0.4;
   M.style.height = 'auto';
-  M.style.height = Math.min(M.scrollHeight, 120) + 'px';
-  M.style.overflowY = M.scrollHeight > 120 ? 'auto' : 'hidden';
+  M.style.height = Math.min(M.scrollHeight, max) + 'px';
+  M.style.overflowY = M.scrollHeight > max ? 'auto' : 'hidden';
 }
 M.addEventListener('input', autoResize);
 M.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendGlobal(); }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (M.value.trim()) sendGlobal(); else keyActive('Enter'); }
+  if (!M.value && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); keyActive(e.key === 'ArrowUp' ? 'Up' : 'Down'); }
+  if (!M.value && e.key === 'Escape') { e.preventDefault(); keyActive('Escape'); }
+  if (!M.value && e.key === 'Tab') { e.preventDefault(); keyActive('Tab'); }
 });
 
 // === iOS keyboard ===
