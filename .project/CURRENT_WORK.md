@@ -27,6 +27,9 @@
   - Draggable pane dividers: `.pane-divider` between siblings (col-resize / row-resize), pointer events for resize, auto-updated on layout changes
   - ASCII table rendering fix: box-drawing chars (U+2500-U+257F) wrapped in fenced code blocks before marked.js parsing, preserving monospace alignment
 
+## Recently Completed (cont. 2)
+- **2026-02-12**: Task Queue — per-pane "QUEUE" button (next to NOTES) opens dropdown panel. Add tasks as list items, play/pause toggle auto-dispatches to CC session as it goes idle (2s buffer). Tasks get strikethrough when done, X to remove. Auto-pauses on manual send. localStorage persistence (`queue:session:windowIndex`), play state resets to paused on reload. No backend changes — entirely client-side using existing `/api/send` and `awaitingResponse` idle detection.
+
 ## Active Work
 None
 

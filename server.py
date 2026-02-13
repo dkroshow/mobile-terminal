@@ -450,6 +450,51 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   width:8px; height:8px; border-left:2px solid var(--border2);
   border-bottom:2px solid var(--border2); border-radius:0 0 0 2px; }
 
+/* Queue panel */
+.pane-queue-btn { background:none; border:none; color:var(--text3);
+  font-size:10px; cursor:pointer; padding:2px 6px;
+  flex-shrink:0; border-radius:3px; font-weight:600; letter-spacing:0.5px; }
+.pane-queue-btn:hover { color:var(--accent); background:rgba(255,255,255,0.05); }
+.pane-queue-btn.active { color:var(--accent); }
+.pane-queue-btn.playing { color:#4ecf6a; }
+.queue-panel { position:absolute; top:30px; right:0; z-index:10;
+  width:min(380px, 95%); max-height:70%; background:var(--bg2);
+  border:1px solid var(--border2); border-radius:0 0 0 12px;
+  display:flex; flex-direction:column; overflow:hidden;
+  transform:translateY(-10px); opacity:0; pointer-events:none;
+  transition:transform .15s ease, opacity .15s ease; }
+.queue-panel.open { transform:translateY(0); opacity:1; pointer-events:auto; }
+.queue-header { display:flex; align-items:center; gap:8px;
+  padding:8px 12px; border-bottom:1px solid var(--border); flex-shrink:0; }
+.queue-header span { font-size:12px; font-weight:600; color:var(--text2); }
+.queue-play-btn { background:none; border:none; cursor:pointer;
+  font-size:14px; padding:0 4px; color:var(--text3); }
+.queue-play-btn:hover { color:var(--text); }
+.queue-play-btn.playing { color:#4ecf6a; }
+.queue-close { background:none; border:none; color:var(--text3); cursor:pointer;
+  font-size:14px; padding:0 4px; margin-left:auto; }
+.queue-close:hover { color:var(--text); }
+.queue-list { flex:1; overflow-y:auto; padding:4px 0; min-height:40px; max-height:260px; }
+.queue-item { display:flex; align-items:center; gap:8px; padding:6px 12px;
+  font-size:13px; color:var(--text); border-left:3px solid transparent; }
+.queue-item.current { border-left-color:var(--accent); background:rgba(217,119,87,0.08); }
+.queue-item.done { text-decoration:line-through; opacity:0.45; }
+.queue-item-text { flex:1; word-break:break-word; line-height:1.4; }
+.queue-item-remove { background:none; border:none; color:var(--text3); cursor:pointer;
+  font-size:14px; padding:0 4px; flex-shrink:0; }
+.queue-item-remove:hover { color:var(--red); }
+.queue-add { display:flex; gap:6px; padding:8px 10px;
+  border-top:1px solid var(--border); flex-shrink:0; }
+.queue-add input { flex:1; background:var(--surface); color:var(--text);
+  border:1px solid var(--border2); border-radius:8px; padding:6px 10px;
+  font-size:13px; font-family:inherit; outline:none; }
+.queue-add input::placeholder { color:var(--text3); }
+.queue-add input:focus { border-color:rgba(217,119,87,0.5); }
+.queue-add button { background:var(--accent); color:#fff; border:none;
+  border-radius:8px; padding:6px 10px; font-size:13px; font-weight:600;
+  cursor:pointer; flex-shrink:0; }
+.queue-add button:active { transform:scale(0.95); }
+
 /* Pane output */
 .pane-output { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; }
 .pane-output.raw { padding:16px 14px;
@@ -716,6 +761,7 @@ let _nextTabId = 1;
 let _dashboardData = null;
 let _sidebarCollapsed = false;
 let _wdSession = null, _wdWindow = null; // window details modal context
+let _queueStates = {}; // tabId -> { items: [{text, done}], playing: false, currentIdx: null, idleTimer: null }
 
 const M = document.getElementById('msg');
 const bar = document.getElementById('bar');
@@ -874,7 +920,7 @@ function parseCCTurns(text) {
 }
 
 // === Render output into target element ===
-function renderOutput(raw, targetEl, state) {
+function renderOutput(raw, targetEl, state, tabId) {
   if (state.rawMode) {
     targetEl.className = 'pane-output raw';
     targetEl.textContent = raw;
@@ -891,11 +937,15 @@ function renderOutput(raw, targetEl, state) {
       if (lastUser && lastUser.lines.join(' ').includes(state.pendingMsg.substring(0, 20)))
         state.pendingMsg = null;
     }
+    const wasAwaiting = state.awaitingResponse;
     if (state.awaitingResponse) {
       const elapsed = Date.now() - state.pendingTime;
       if (elapsed > 3000 && isIdle(clean)) state.awaitingResponse = false;
       if (elapsed > 3000 && state.lastOutputChange > 0 && (Date.now() - state.lastOutputChange) > 5000) state.awaitingResponse = false;
       if (elapsed > 180000) state.awaitingResponse = false;
+    }
+    if (wasAwaiting && !state.awaitingResponse && tabId) {
+      onQueueTaskCompleted(tabId);
     }
     let lastRole = '';
     for (const t of turns) {
@@ -1096,6 +1146,11 @@ function closeTab(tabId, skipRender) {
   }
   delete allTabs[tabId];
   delete tabStates[tabId];
+  // Clean up queue state
+  if (_queueStates[tabId]) {
+    if (_queueStates[tabId].idleTimer) clearTimeout(_queueStates[tabId].idleTimer);
+    delete _queueStates[tabId];
+  }
   const outEl = document.getElementById('tab-output-' + tabId);
   if (outEl) outEl.remove();
 
@@ -1131,6 +1186,7 @@ function focusTab(tabId) {
       renderPaneTabs(p.id);
       showActiveTabOutput(p.id);
       updateNotepadContent(p.id);
+      updateQueueContent(p.id);
       updatePolling();
       // Update view label
       const state = tabStates[tabId];
@@ -1211,6 +1267,10 @@ function renderPaneTabs(paneId) {
   // Notepad toggle button (only if pane has an active tab)
   if (pane.activeTabId) {
     html += '<button class="pane-notepad-btn' + (paneEl.querySelector('.notepad-panel.open') ? ' active' : '') + '" onclick="toggleNotepad(' + paneId + ')" title="Notepad">NOTES</button>';
+    const qs = _queueStates[pane.activeTabId];
+    const qOpen = paneEl.querySelector('.queue-panel.open');
+    const qPlaying = qs && qs.playing;
+    html += '<button class="pane-queue-btn' + (qOpen ? ' active' : '') + (qPlaying ? ' playing' : '') + '" onclick="toggleQueue(' + paneId + ')" title="Task Queue">QUEUE</button>';
   }
   // Close pane button (only if >1 pane)
   if (panes.length > 1) {
@@ -1293,6 +1353,9 @@ function toggleNotepad(paneId) {
   }
   const pane = panes.find(p => p.id === paneId);
   if (!pane || !pane.activeTabId) return;
+  // Close queue if open
+  const qp = paneEl.querySelector('.queue-panel.open');
+  if (qp) { qp.classList.remove('open'); paneEl.querySelector('.pane-queue-btn')?.classList.remove('active'); }
   if (!panel) {
     panel = document.createElement('div');
     panel.className = 'notepad-panel';
@@ -1367,6 +1430,228 @@ function updateNotepadContent(paneId) {
   if (key) {
     try { ta.value = localStorage.getItem(key) || ''; } catch(e) { ta.value = ''; }
   } else { ta.value = ''; }
+}
+
+// === Task Queue ===
+function queueKey(tabId) {
+  const tab = allTabs[tabId];
+  if (!tab) return null;
+  return 'queue:' + tab.session + ':' + tab.windowIndex;
+}
+
+function getQueueState(tabId) {
+  if (!_queueStates[tabId]) {
+    let items = [];
+    const key = queueKey(tabId);
+    if (key) {
+      try {
+        const saved = localStorage.getItem(key);
+        if (saved) items = JSON.parse(saved);
+      } catch(e) {}
+    }
+    _queueStates[tabId] = { items: items, playing: false, currentIdx: null, idleTimer: null };
+  }
+  return _queueStates[tabId];
+}
+
+function saveQueue(tabId) {
+  const key = queueKey(tabId);
+  if (!key) return;
+  const qs = _queueStates[tabId];
+  if (!qs) return;
+  try { localStorage.setItem(key, JSON.stringify(qs.items)); } catch(e) {}
+}
+
+function toggleQueue(paneId) {
+  const pane = panes.find(p => p.id === paneId);
+  if (!pane || !pane.activeTabId) return;
+  const paneEl = document.getElementById('pane-' + paneId);
+  if (!paneEl) return;
+  let panel = paneEl.querySelector('.queue-panel');
+  if (panel && panel.classList.contains('open')) {
+    panel.classList.remove('open');
+    paneEl.querySelector('.pane-queue-btn')?.classList.remove('active');
+    return;
+  }
+  // Close notepad if open
+  const np = paneEl.querySelector('.notepad-panel.open');
+  if (np) { np.classList.remove('open'); paneEl.querySelector('.pane-notepad-btn')?.classList.remove('active'); }
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.className = 'queue-panel';
+    paneEl.appendChild(panel);
+  }
+  getQueueState(pane.activeTabId);
+  renderQueuePanel(paneId);
+  panel.classList.add('open');
+  paneEl.querySelector('.pane-queue-btn')?.classList.add('active');
+  const inp = panel.querySelector('.queue-add input');
+  if (inp) inp.focus();
+}
+
+function renderQueuePanel(paneId) {
+  const pane = panes.find(p => p.id === paneId);
+  if (!pane || !pane.activeTabId) return;
+  const paneEl = document.getElementById('pane-' + paneId);
+  if (!paneEl) return;
+  const panel = paneEl.querySelector('.queue-panel');
+  if (!panel) return;
+  const qs = getQueueState(pane.activeTabId);
+  const undone = qs.items.filter(i => !i.done).length;
+  const total = qs.items.length;
+  const playIcon = qs.playing ? '\\u23f8' : '\\u25b6';
+  let html = '<div class="queue-header">'
+    + '<button class="queue-play-btn' + (qs.playing ? ' playing' : '') + '" onclick="toggleQueuePlay(' + paneId + ')" title="' + (qs.playing ? 'Pause' : 'Play') + '">' + playIcon + '</button>'
+    + '<span>Queue' + (total ? ' (' + undone + '/' + total + ')' : '') + '</span>'
+    + '<button class="queue-close" onclick="toggleQueue(' + paneId + ')">&times;</button>'
+    + '</div><div class="queue-list">';
+  for (let i = 0; i < qs.items.length; i++) {
+    const item = qs.items[i];
+    const cls = (item.done ? ' done' : '') + (i === qs.currentIdx ? ' current' : '');
+    html += '<div class="queue-item' + cls + '">'
+      + '<span class="queue-item-text">' + esc(item.text) + '</span>'
+      + '<button class="queue-item-remove" onclick="removeQueueItem(' + pane.activeTabId + ',' + i + ')">&times;</button>'
+      + '</div>';
+  }
+  if (!qs.items.length) {
+    html += '<div style="padding:16px 12px;color:var(--text3);font-size:12px;text-align:center;">No tasks yet</div>';
+  }
+  html += '</div><div class="queue-add">'
+    + '<input type="text" placeholder="Add a task\\u2026" onkeydown="if(event.key===\\'Enter\\'){event.preventDefault();addQueueItem(' + paneId + ');}">'
+    + '<button onclick="addQueueItem(' + paneId + ')">+</button>'
+    + '</div>';
+  panel.innerHTML = html;
+}
+
+function addQueueItem(paneId) {
+  const pane = panes.find(p => p.id === paneId);
+  if (!pane || !pane.activeTabId) return;
+  const paneEl = document.getElementById('pane-' + paneId);
+  if (!paneEl) return;
+  const inp = paneEl.querySelector('.queue-add input');
+  if (!inp) return;
+  const text = inp.value.trim();
+  if (!text) return;
+  inp.value = '';
+  const qs = getQueueState(pane.activeTabId);
+  qs.items.push({ text: text, done: false });
+  saveQueue(pane.activeTabId);
+  renderQueuePanel(paneId);
+  paneEl.querySelector('.queue-add input')?.focus();
+}
+
+function removeQueueItem(tabId, idx) {
+  const qs = _queueStates[tabId];
+  if (!qs || idx < 0 || idx >= qs.items.length) return;
+  // Adjust currentIdx if needed
+  if (qs.currentIdx !== null) {
+    if (idx < qs.currentIdx) qs.currentIdx--;
+    else if (idx === qs.currentIdx) qs.currentIdx = null;
+  }
+  qs.items.splice(idx, 1);
+  saveQueue(tabId);
+  // Re-render in the pane that has this tab
+  for (const p of panes) {
+    if (p.activeTabId === tabId) { renderQueuePanel(p.id); break; }
+  }
+}
+
+function toggleQueuePlay(paneId) {
+  const pane = panes.find(p => p.id === paneId);
+  if (!pane || !pane.activeTabId) return;
+  const qs = getQueueState(pane.activeTabId);
+  if (qs.playing) {
+    pauseQueue(pane.activeTabId);
+  } else {
+    startQueue(pane.activeTabId);
+  }
+  renderQueuePanel(paneId);
+  renderPaneTabs(paneId);
+}
+
+function startQueue(tabId) {
+  const qs = getQueueState(tabId);
+  qs.playing = true;
+  scheduleQueueCheck(tabId);
+}
+
+function pauseQueue(tabId) {
+  const qs = _queueStates[tabId];
+  if (!qs) return;
+  qs.playing = false;
+  if (qs.idleTimer) { clearTimeout(qs.idleTimer); qs.idleTimer = null; }
+  // Re-render in the pane that has this tab
+  for (const p of panes) {
+    if (p.activeTabId === tabId) { renderQueuePanel(p.id); renderPaneTabs(p.id); break; }
+  }
+}
+
+function scheduleQueueCheck(tabId) {
+  const qs = _queueStates[tabId];
+  if (!qs || !qs.playing) return;
+  if (qs.idleTimer) clearTimeout(qs.idleTimer);
+  qs.idleTimer = setTimeout(() => {
+    qs.idleTimer = null;
+    tryDispatchNext(tabId);
+  }, 2000);
+}
+
+function tryDispatchNext(tabId) {
+  const qs = _queueStates[tabId];
+  if (!qs || !qs.playing) return;
+  const state = tabStates[tabId];
+  const tab = allTabs[tabId];
+  if (!state || !tab) return;
+  // Don't dispatch if already awaiting a response
+  if (state.awaitingResponse) { scheduleQueueCheck(tabId); return; }
+  // Find next undone item
+  let nextIdx = -1;
+  for (let i = 0; i < qs.items.length; i++) {
+    if (!qs.items[i].done) { nextIdx = i; break; }
+  }
+  if (nextIdx < 0) {
+    // All done
+    qs.playing = false; qs.currentIdx = null;
+    for (const p of panes) {
+      if (p.activeTabId === tabId) { renderQueuePanel(p.id); renderPaneTabs(p.id); break; }
+    }
+    return;
+  }
+  qs.currentIdx = nextIdx;
+  const text = qs.items[nextIdx].text;
+  state.pendingMsg = text; state.pendingTime = Date.now(); state.awaitingResponse = true;
+  const outEl = document.getElementById('tab-output-' + tabId);
+  if (outEl) { renderOutput(state.rawContent || state.last, outEl, state, tabId); outEl.scrollTop = outEl.scrollHeight; }
+  fetch('/api/send', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ cmd: text, session: tab.session, window: tab.windowIndex })
+  });
+  for (const p of panes) {
+    if (p.activeTabId === tabId) { renderQueuePanel(p.id); break; }
+  }
+}
+
+function onQueueTaskCompleted(tabId) {
+  const qs = _queueStates[tabId];
+  if (!qs || !qs.playing) return;
+  if (qs.currentIdx !== null && qs.currentIdx < qs.items.length) {
+    qs.items[qs.currentIdx].done = true;
+    qs.currentIdx = null;
+    saveQueue(tabId);
+  }
+  // Re-render and schedule next
+  for (const p of panes) {
+    if (p.activeTabId === tabId) { renderQueuePanel(p.id); break; }
+  }
+  scheduleQueueCheck(tabId);
+}
+
+function updateQueueContent(paneId) {
+  const paneEl = document.getElementById('pane-' + paneId);
+  if (!paneEl) return;
+  const panel = paneEl.querySelector('.queue-panel');
+  if (!panel || !panel.classList.contains('open')) return;
+  renderQueuePanel(paneId);
 }
 
 // === Layout ===
@@ -1463,7 +1748,7 @@ async function pollTab(tabId) {
       const outEl = document.getElementById('tab-output-' + tabId);
       if (!outEl) return;
       const atBottom = outEl.scrollHeight - outEl.scrollTop - outEl.clientHeight < 80;
-      renderOutput(d.output, outEl, state);
+      renderOutput(d.output, outEl, state, tabId);
       if (atBottom) outEl.scrollTop = outEl.scrollHeight;
     }
   } catch(e) {}
@@ -1500,8 +1785,11 @@ async function sendToPane(paneId) {
   const state = tabStates[pane.activeTabId];
   if (!tab || !state) return;
   state.pendingMsg = text; state.pendingTime = Date.now(); state.awaitingResponse = true;
+  // Pause queue on manual send
+  const qs = _queueStates[pane.activeTabId];
+  if (qs && qs.playing) pauseQueue(pane.activeTabId);
   const outEl = document.getElementById('tab-output-' + pane.activeTabId);
-  if (outEl) { renderOutput(state.rawContent || state.last, outEl, state); outEl.scrollTop = outEl.scrollHeight; }
+  if (outEl) { renderOutput(state.rawContent || state.last, outEl, state, pane.activeTabId); outEl.scrollTop = outEl.scrollHeight; }
   await fetch('/api/send', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ cmd: text, session: tab.session, window: tab.windowIndex })
@@ -1513,8 +1801,11 @@ async function sendGlobal() {
   const active = getActiveTab(); if (!active) return;
   M.value = ''; M.style.height = 'auto';
   active.state.pendingMsg = text; active.state.pendingTime = Date.now(); active.state.awaitingResponse = true;
+  // Pause queue on manual send
+  const qsg = _queueStates[active.tabId];
+  if (qsg && qsg.playing) pauseQueue(active.tabId);
   const outEl = document.getElementById('tab-output-' + active.tabId);
-  if (outEl) { renderOutput(active.state.rawContent || active.state.last, outEl, active.state); outEl.scrollTop = outEl.scrollHeight; }
+  if (outEl) { renderOutput(active.state.rawContent || active.state.last, outEl, active.state, active.tabId); outEl.scrollTop = outEl.scrollHeight; }
   await fetch('/api/send', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ cmd: text, session: active.tab.session, window: active.tab.windowIndex })
@@ -1555,7 +1846,7 @@ function toggleRaw() {
   active.state.rawMode = !active.state.rawMode;
   document.getElementById('view-label').textContent = active.state.rawMode ? 'Raw' : 'Clean';
   const outEl = document.getElementById('tab-output-' + active.tabId);
-  if (outEl) { renderOutput(active.state.rawContent || active.state.last, outEl, active.state); outEl.scrollTop = outEl.scrollHeight; }
+  if (outEl) { renderOutput(active.state.rawContent || active.state.last, outEl, active.state, active.tabId); outEl.scrollTop = outEl.scrollHeight; }
 }
 
 // === Text size ===
