@@ -25,6 +25,7 @@
   - Sidebar ⓘ replaced with ⋮ (kebab menu icon)
   - Sidebar drag reordering: sessions and windows reorderable via HTML5 DnD; custom order persisted to `localStorage sidebar:order`; `_sbDragging` flag pauses re-renders
   - Draggable pane dividers: `.pane-divider` between siblings (col-resize / row-resize), pointer events for resize, auto-updated on layout changes
+  - ASCII table rendering fix: box-drawing chars (U+2500-U+257F) wrapped in fenced code blocks before marked.js parsing, preserving monospace alignment
 
 ## Active Work
 None
