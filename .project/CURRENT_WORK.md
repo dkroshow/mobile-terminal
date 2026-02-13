@@ -15,6 +15,16 @@
 ## Recently Completed (cont.)
 - **2026-02-12**: Per-window notepad — "NOTES" button in pane tab bar, dropdown panel from top-right with drag-to-resize (size persisted). Textarea persists to localStorage keyed by `notepad:session:windowIndex`. Updates on tab switch. Stays open on click-outside; toggle or X to close.
 - **2026-02-12**: Layout persistence — pane/tab layout saved to localStorage on every mutation (open/close/switch tab, add/remove pane, drag tab). Restored on init with validation against live tmux sessions. Guard flag prevents save during restore.
+- **2026-02-12**: Batch UI improvements (9 items):
+  - Notepad bidirectional + corner resize (left edge, bottom edge, bottom-left corner; both dimensions saved as JSON)
+  - Click anywhere on pane to focus (mousedown handler)
+  - Fix rename: backend was using `_current_session` instead of the window's actual session; now passes session from details popup
+  - Claude label shown only on first card after user turn (skip empty label div to avoid gap)
+  - Reduced bubble padding for A- (padV 8, padH 12, gap 6) and A-- (padV 6, padH 8, gap 3) tiers
+  - Vertical pane splitting: drag tab to bottom half of pane creates top/bottom split via `.pane-stack` wrapper; layout save/restore handles stacks; max 6 panes
+  - Sidebar ⓘ replaced with ⋮ (kebab menu icon)
+  - Sidebar drag reordering: sessions and windows reorderable via HTML5 DnD; custom order persisted to `localStorage sidebar:order`; `_sbDragging` flag pauses re-renders
+  - Draggable pane dividers: `.pane-divider` between siblings (col-resize / row-resize), pointer events for resize, auto-updated on layout changes
 
 ## Active Work
 None
