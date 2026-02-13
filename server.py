@@ -728,7 +728,21 @@ function md(s) {
   if (typeof marked !== 'undefined') {
     try {
       marked.setOptions({ breaks: false });
-      return marked.parse(s);
+      // Wrap lines with box-drawing chars in fenced code blocks
+      const boxRe = /[\u2500-\u257f\u2580-\u259f]/;
+      const lines = s.split('\\n');
+      const out = []; let inBox = false;
+      for (const line of lines) {
+        if (boxRe.test(line)) {
+          if (!inBox) { out.push('```'); inBox = true; }
+          out.push(line);
+        } else {
+          if (inBox) { out.push('```'); inBox = false; }
+          out.push(line);
+        }
+      }
+      if (inBox) out.push('```');
+      return marked.parse(out.join('\\n'));
     } catch(e) { /* fall through to plain text */ }
   }
   return '<p>' + esc(s) + '</p>';
