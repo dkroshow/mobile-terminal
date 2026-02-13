@@ -382,8 +382,11 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .pane-stack { display:flex; flex-direction:column; flex:1; min-width:0;
   overflow:hidden; border-right:1px solid var(--border2); }
 .pane-stack:last-child { border-right:none; }
-.pane-stack > .pane { border-right:none; flex:1; }
-.pane-stack > .pane:not(:last-child) { border-bottom:1px solid var(--border2); }
+.pane-stack > .pane { border-right:none; border-bottom:none; flex:1; }
+.pane-divider { flex-shrink:0; background:var(--border2); transition:background .15s; z-index:2; }
+.pane-divider.col { width:4px; cursor:col-resize; }
+.pane-divider.row { height:4px; cursor:row-resize; }
+.pane-divider:hover, .pane-divider.active { background:var(--accent); }
 .drop-indicator { position:absolute; left:0; right:0; pointer-events:none;
   background:rgba(217,119,87,0.15); border:2px solid var(--accent);
   z-index:5; display:none; box-sizing:border-box; }
@@ -1358,6 +1361,62 @@ function updateLayout() {
   bar.classList.toggle('hidden', multiPane);
   document.querySelectorAll('.pane-input').forEach(pi => {
     pi.classList.toggle('visible', multiPane);
+  });
+  updateDividers();
+}
+
+function updateDividers() {
+  document.querySelectorAll('.pane-divider').forEach(d => d.remove());
+  addDividers(panesContainer, 'col');
+  document.querySelectorAll('.pane-stack').forEach(s => addDividers(s, 'row'));
+}
+function addDividers(parent, dir) {
+  const kids = [...parent.children].filter(c =>
+    c.classList.contains('pane') || c.classList.contains('pane-stack'));
+  for (let i = 1; i < kids.length; i++) {
+    const d = document.createElement('div');
+    d.className = 'pane-divider ' + dir;
+    parent.insertBefore(d, kids[i]);
+    setupDivider(d, dir);
+  }
+}
+function setupDivider(div, dir) {
+  let startPos, prevEl, nextEl, prevSize, nextSize;
+  div.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    prevEl = div.previousElementSibling;
+    nextEl = div.nextElementSibling;
+    if (!prevEl || !nextEl) return;
+    div.classList.add('active');
+    if (dir === 'col') {
+      startPos = e.clientX;
+      prevSize = prevEl.getBoundingClientRect().width;
+      nextSize = nextEl.getBoundingClientRect().width;
+    } else {
+      startPos = e.clientY;
+      prevSize = prevEl.getBoundingClientRect().height;
+      nextSize = nextEl.getBoundingClientRect().height;
+    }
+    prevEl.style.flex = 'none'; nextEl.style.flex = 'none';
+    if (dir === 'col') {
+      prevEl.style.width = prevSize + 'px'; nextEl.style.width = nextSize + 'px';
+    } else {
+      prevEl.style.height = prevSize + 'px'; nextEl.style.height = nextSize + 'px';
+    }
+    function onMove(ev) {
+      const delta = dir === 'col' ? ev.clientX - startPos : ev.clientY - startPos;
+      const p = Math.max(80, prevSize + delta);
+      const n = Math.max(80, nextSize - delta);
+      if (dir === 'col') { prevEl.style.width = p + 'px'; nextEl.style.width = n + 'px'; }
+      else { prevEl.style.height = p + 'px'; nextEl.style.height = n + 'px'; }
+    }
+    function onUp() {
+      div.classList.remove('active');
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+    }
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
   });
 }
 
