@@ -326,7 +326,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .sb-win-status.waiting { color:var(--accent); }
 .sb-win-status.idle { color:var(--green); }
 .sb-win-detail-btn { background:none; border:none; color:var(--text3);
-  font-size:14px; cursor:pointer; padding:2px 4px; border-radius:4px;
+  font-size:16px; cursor:pointer; padding:2px 4px; border-radius:4px;
   flex-shrink:0; opacity:0; transition:opacity .15s; line-height:1; }
 .sb-win:hover .sb-win-detail-btn { opacity:1; }
 .sb-win-detail-btn:hover { color:var(--text); }
@@ -1544,7 +1544,7 @@ function renderSidebar() {
         + '<div class="sb-win-cwd">' + esc(abbreviateCwd(w.cwd)) + '</div>'
         + '</div>'
         + '<div class="sb-win-status ' + statusClass + '" data-wid="' + wid + '">' + status + '</div>'
-        + '<button class="sb-win-detail-btn" onclick="event.stopPropagation();openWD(\\'' + esc(s.name).replace(/'/g, "\\\\'") + '\\',' + w.index + ')" title="Details">&#9432;</button>'
+        + '<button class="sb-win-detail-btn" onclick="event.stopPropagation();openWD(\\'' + esc(s.name).replace(/'/g, "\\\\'") + '\\',' + w.index + ')" title="Details">&#8942;</button>'
         + '</div>';
     }
     html += '</div>';
