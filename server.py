@@ -1403,8 +1403,8 @@ function toggleRaw() {
 
 // === Text size ===
 const TEXT_SIZES = [
-  { label: 'A--', text: '11px', code: '10px', mono: '10px', padV: '8px', padH: '10px', gap: '4px', radius: '12px', lineH: '1.4' },
-  { label: 'A-',  text: '13px', code: '11px', mono: '11px', padV: '12px', padH: '14px', gap: '8px', radius: '14px', lineH: '1.55' },
+  { label: 'A--', text: '11px', code: '10px', mono: '10px', padV: '6px', padH: '8px', gap: '3px', radius: '10px', lineH: '1.4' },
+  { label: 'A-',  text: '13px', code: '11px', mono: '11px', padV: '8px', padH: '12px', gap: '6px', radius: '14px', lineH: '1.55' },
   { label: 'A',   text: '15px', code: '12.5px', mono: '12.5px', padV: '16px', padH: '18px', gap: '12px', radius: '18px', lineH: '1.7' },
   { label: 'A+',  text: '17px', code: '14px', mono: '14px', padV: '18px', padH: '20px', gap: '14px', radius: '20px', lineH: '1.8' },
 ];
