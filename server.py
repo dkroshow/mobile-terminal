@@ -299,9 +299,11 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 
 /* Sidebar session groups */
 .sb-session { margin-bottom:4px; }
+.sb-session.sb-drag-over { border-top:2px solid var(--accent); }
+.sb-session.dragging { opacity:0.4; }
 .sb-session-header { display:flex; align-items:center; gap:6px; padding:8px 8px 4px;
   color:var(--text3); font-size:11px; font-weight:700; text-transform:uppercase;
-  letter-spacing:0.5px; }
+  letter-spacing:0.5px; cursor:grab; }
 .sb-session-header .sb-badge { font-size:9px; padding:1px 5px; border-radius:6px;
   background:var(--accent); color:#fff; font-weight:500; text-transform:none;
   letter-spacing:0; }
@@ -309,6 +311,8 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   border-radius:8px; cursor:pointer; transition:all .12s;
   -webkit-user-select:none; user-select:none; }
 .sb-win:hover { background:var(--surface); }
+.sb-win.sb-drag-over { border-top:2px solid var(--accent); margin-top:-2px; }
+.sb-win.dragging { opacity:0.4; }
 .sb-win-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
 .sb-win-dot.idle { background:var(--green); }
 .sb-win-dot.working { background:var(--orange); animation:pulse 1.5s ease-in-out infinite; }
@@ -1522,22 +1526,46 @@ function closeMobileSidebar() {
   document.getElementById('sidebar-backdrop').classList.remove('open');
 }
 
+let _sidebarOrder = { sessions: [], windows: {} };
+try { const so = JSON.parse(localStorage.getItem('sidebar:order')); if (so) _sidebarOrder = so; } catch(e) {}
+let _sbDragging = false;
+
 function renderSidebar() {
+  if (_sbDragging) return;
   const data = _dashboardData;
   if (!data) return;
   const content = document.getElementById('sidebar-content');
+  // Sort sessions by custom order
+  const sessions = [...data.sessions].sort((a, b) => {
+    const ia = _sidebarOrder.sessions.indexOf(a.name);
+    const ib = _sidebarOrder.sessions.indexOf(b.name);
+    if (ia < 0 && ib < 0) return 0;
+    if (ia < 0) return 1;
+    if (ib < 0) return 1;
+    return ia - ib;
+  });
   let html = '';
-  for (const s of data.sessions) {
-    html += '<div class="sb-session">';
+  for (const s of sessions) {
+    html += '<div class="sb-session" draggable="true" data-session="' + esc(s.name) + '">';
     html += '<div class="sb-session-header">' + esc(s.name)
       + (s.attached ? ' <span class="sb-badge">attached</span>' : '') + '</div>';
-    for (const w of s.windows) {
+    // Sort windows by custom order
+    const winOrder = _sidebarOrder.windows[s.name] || [];
+    const windows = [...s.windows].sort((a, b) => {
+      const ia = winOrder.indexOf(a.index);
+      const ib = winOrder.indexOf(b.index);
+      if (ia < 0 && ib < 0) return 0;
+      if (ia < 0) return 1;
+      if (ib < 0) return 1;
+      return ia - ib;
+    });
+    for (const w of windows) {
       const dotClass = w.is_cc ? (w.cc_status || 'idle') : 'none';
       let status = w.is_cc ? statusLabel(w.cc_status) : '';
       if (w.cc_context_pct != null) status += ' ' + w.cc_context_pct + '%';
       const statusClass = w.is_cc ? (w.cc_status || 'idle') : '';
       const wid = esc(s.name) + ':' + w.index;
-      html += '<div class="sb-win">'
+      html += '<div class="sb-win" draggable="true" data-session="' + esc(s.name) + '" data-widx="' + w.index + '">'
         + '<div class="sb-win-dot ' + dotClass + '" data-wid="' + wid + '" onclick="event.stopPropagation();openTab(\\'' + esc(s.name).replace(/'/g, "\\\\'") + '\\',' + w.index + ',\\'' + esc(w.name).replace(/'/g, "\\\\'") + '\\')"></div>'
         + '<div class="sb-win-info" onclick="openTab(\\'' + esc(s.name).replace(/'/g, "\\\\'") + '\\',' + w.index + ',\\'' + esc(w.name).replace(/'/g, "\\\\'") + '\\')">'
         + '<div class="sb-win-name">' + esc(w.name) + '</div>'
@@ -1555,6 +1583,102 @@ function renderSidebar() {
 function openTab(session, windowIndex, windowName) {
   closeMobileSidebar();
   createTab(session, windowIndex, windowName);
+}
+
+// === Sidebar drag reorder ===
+(function() {
+  const sbContent = document.getElementById('sidebar-content');
+  let dragType = null, dragSession = null, dragWidx = null;
+
+  sbContent.addEventListener('dragstart', e => {
+    const win = e.target.closest('.sb-win[draggable]');
+    const sess = e.target.closest('.sb-session[draggable]');
+    if (win) {
+      dragType = 'window';
+      dragSession = win.dataset.session;
+      dragWidx = parseInt(win.dataset.widx);
+      win.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', 'sb-win');
+    } else if (sess) {
+      dragType = 'session';
+      dragSession = sess.dataset.session;
+      sess.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', 'sb-session');
+    }
+    _sbDragging = true;
+  });
+
+  sbContent.addEventListener('dragover', e => {
+    e.preventDefault();
+    sbContent.querySelectorAll('.sb-drag-over').forEach(el => el.classList.remove('sb-drag-over'));
+    if (dragType === 'window') {
+      const win = e.target.closest('.sb-win');
+      if (win && win.dataset.session === dragSession) win.classList.add('sb-drag-over');
+    } else if (dragType === 'session') {
+      const sess = e.target.closest('.sb-session');
+      if (sess && sess.dataset.session !== dragSession) sess.classList.add('sb-drag-over');
+    }
+  });
+
+  sbContent.addEventListener('dragleave', e => {
+    const el = e.target.closest('.sb-drag-over');
+    if (el) el.classList.remove('sb-drag-over');
+  });
+
+  sbContent.addEventListener('drop', e => {
+    e.preventDefault();
+    sbContent.querySelectorAll('.sb-drag-over,.dragging').forEach(el => {
+      el.classList.remove('sb-drag-over', 'dragging');
+    });
+    if (dragType === 'session') {
+      const target = e.target.closest('.sb-session');
+      if (target && target.dataset.session !== dragSession) {
+        // Build full session order
+        const allSessions = [...sbContent.querySelectorAll('.sb-session')].map(el => el.dataset.session);
+        const fromIdx = allSessions.indexOf(dragSession);
+        const toIdx = allSessions.indexOf(target.dataset.session);
+        if (fromIdx >= 0 && toIdx >= 0) {
+          allSessions.splice(fromIdx, 1);
+          allSessions.splice(toIdx, 0, dragSession);
+          _sidebarOrder.sessions = allSessions;
+          saveSidebarOrder();
+          renderSidebar();
+        }
+      }
+    } else if (dragType === 'window') {
+      const target = e.target.closest('.sb-win');
+      if (target && target.dataset.session === dragSession) {
+        const targetWidx = parseInt(target.dataset.widx);
+        const wins = [...sbContent.querySelectorAll('.sb-win[data-session="' + CSS.escape(dragSession) + '"]')]
+          .map(el => parseInt(el.dataset.widx));
+        const fromIdx = wins.indexOf(dragWidx);
+        const toIdx = wins.indexOf(targetWidx);
+        if (fromIdx >= 0 && toIdx >= 0 && fromIdx !== toIdx) {
+          wins.splice(fromIdx, 1);
+          wins.splice(toIdx, 0, dragWidx);
+          _sidebarOrder.windows[dragSession] = wins;
+          saveSidebarOrder();
+          renderSidebar();
+        }
+      }
+    }
+    _sbDragging = false;
+    dragType = null; dragSession = null; dragWidx = null;
+  });
+
+  sbContent.addEventListener('dragend', () => {
+    sbContent.querySelectorAll('.sb-drag-over,.dragging').forEach(el => {
+      el.classList.remove('sb-drag-over', 'dragging');
+    });
+    _sbDragging = false;
+    dragType = null; dragSession = null; dragWidx = null;
+  });
+})();
+
+function saveSidebarOrder() {
+  try { localStorage.setItem('sidebar:order', JSON.stringify(_sidebarOrder)); } catch(e) {}
 }
 
 // === Window details modal ===
