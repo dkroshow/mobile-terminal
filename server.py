@@ -427,6 +427,13 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .notepad-resize::after { content:''; position:absolute; left:50%; top:50%;
   transform:translate(-50%,-50%); width:30px; height:3px; border-radius:2px;
   background:var(--border2); }
+.notepad-resize-left { position:absolute; left:0; top:30px; bottom:6px;
+  width:6px; cursor:ew-resize; z-index:1; }
+.notepad-resize-corner { position:absolute; left:0; bottom:0;
+  width:14px; height:14px; cursor:nesw-resize; z-index:2; }
+.notepad-resize-corner::after { content:''; position:absolute; left:3px; bottom:3px;
+  width:8px; height:8px; border-left:2px solid var(--border2);
+  border-bottom:2px solid var(--border2); border-radius:0 0 0 2px; }
 
 /* Pane output */
 .pane-output { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; }
@@ -1189,36 +1196,48 @@ function toggleNotepad(paneId) {
     panel.innerHTML = '<div class="notepad-header"><span>Notes</span>'
       + '<button class="notepad-close" onclick="toggleNotepad(' + paneId + ')">&times;</button></div>'
       + '<textarea placeholder="Jot notes for this window..."></textarea>'
-      + '<div class="notepad-resize"></div>';
+      + '<div class="notepad-resize"></div>'
+      + '<div class="notepad-resize-left"></div>'
+      + '<div class="notepad-resize-corner"></div>';
     panel.querySelector('textarea').addEventListener('input', function() {
       const pn = panes.find(x => x.id === paneId);
       if (!pn || !pn.activeTabId) return;
       const key = notepadKey(pn.activeTabId);
       if (key) try { localStorage.setItem(key, this.value); } catch(e) {}
     });
-    // Drag-to-resize from bottom edge
-    const handle = panel.querySelector('.notepad-resize');
-    let startY, startH;
-    function onPointerMove(e) {
-      const newH = Math.max(120, startH + (e.clientY - startY));
-      panel.style.height = newH + 'px';
+    // Drag-to-resize (bottom=vertical, left=horizontal, corner=both)
+    function setupResize(handle, mode) {
+      let sx, sy, sw, sh;
+      function onMove(e) {
+        if (mode !== 'h') panel.style.height = Math.max(120, sh + (e.clientY - sy)) + 'px';
+        if (mode !== 'v') panel.style.width = Math.max(200, sw - (e.clientX - sx)) + 'px';
+      }
+      function onUp() {
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        try { localStorage.setItem('notepad:size', JSON.stringify({
+          w: panel.style.width, h: panel.style.height
+        })); } catch(e) {}
+      }
+      handle.addEventListener('pointerdown', function(e) {
+        e.preventDefault();
+        sx = e.clientX; sy = e.clientY;
+        sw = panel.offsetWidth; sh = panel.offsetHeight;
+        document.addEventListener('pointermove', onMove);
+        document.addEventListener('pointerup', onUp);
+      });
     }
-    function onPointerUp(e) {
-      document.removeEventListener('pointermove', onPointerMove);
-      document.removeEventListener('pointerup', onPointerUp);
-      try { localStorage.setItem('notepad:size', panel.style.height); } catch(e) {}
-    }
-    handle.addEventListener('pointerdown', function(e) {
-      e.preventDefault();
-      startY = e.clientY;
-      startH = panel.offsetHeight;
-      document.addEventListener('pointermove', onPointerMove);
-      document.addEventListener('pointerup', onPointerUp);
-    });
+    setupResize(panel.querySelector('.notepad-resize'), 'v');
+    setupResize(panel.querySelector('.notepad-resize-left'), 'h');
+    setupResize(panel.querySelector('.notepad-resize-corner'), 'both');
     // Restore saved size
     try {
       const saved = localStorage.getItem('notepad:size');
-      if (saved) panel.style.height = saved;
+      if (saved) {
+        const sz = JSON.parse(saved);
+        if (sz.w) panel.style.width = sz.w;
+        if (sz.h) panel.style.height = sz.h;
+      }
     } catch(e) {}
     paneEl.appendChild(panel);
   }
