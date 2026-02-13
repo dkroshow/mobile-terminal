@@ -13,7 +13,8 @@
 - **2026-02-10**: Added launchd LaunchAgent for always-on server
 
 ## Recently Completed (cont.)
-- **2026-02-12**: Per-window notepad — dropdown panel in pane tab bar (pencil ✎ icon), slides down from top-right with transition. Textarea persists to localStorage keyed by `notepad:session:windowIndex`. Updates on tab switch. Click-outside-to-close.
+- **2026-02-12**: Per-window notepad — "NOTES" button in pane tab bar, dropdown panel from top-right with drag-to-resize (size persisted). Textarea persists to localStorage keyed by `notepad:session:windowIndex`. Updates on tab switch. Stays open on click-outside; toggle or X to close.
+- **2026-02-12**: Layout persistence — pane/tab layout saved to localStorage on every mutation (open/close/switch tab, add/remove pane, drag tab). Restored on init with validation against live tmux sessions. Guard flag prevents save during restore.
 
 ## Active Work
 None
