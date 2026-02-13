@@ -375,6 +375,14 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   border-right:1px solid var(--border2); position:relative; }
 .pane:last-child { border-right:none; }
 .pane.drag-over { outline:2px solid var(--accent); outline-offset:-2px; }
+.pane-stack { display:flex; flex-direction:column; flex:1; min-width:0;
+  overflow:hidden; border-right:1px solid var(--border2); }
+.pane-stack:last-child { border-right:none; }
+.pane-stack > .pane { border-right:none; flex:1; }
+.pane-stack > .pane:not(:last-child) { border-bottom:1px solid var(--border2); }
+.drop-indicator { position:absolute; left:0; right:0; pointer-events:none;
+  background:rgba(217,119,87,0.15); border:2px solid var(--accent);
+  z-index:5; display:none; box-sizing:border-box; }
 .pane.focused .pane-tab-bar { border-bottom-color:var(--accent); }
 
 /* Pane tab bar */
@@ -894,8 +902,8 @@ function renderOutput(raw, targetEl, state) {
 }
 
 // === Pane management ===
-function createPane() {
-  if (panes.length >= 3) return null;
+function createPane(parentEl) {
+  if (panes.length >= 6) return null;
   const id = _nextPaneId++;
   panes.push({ id, tabIds: [], activeTabId: null });
   const el = document.createElement('div');
@@ -906,8 +914,9 @@ function createPane() {
     + '<div class="pane-input"><textarea rows="1" placeholder="Enter command..."'
     + ' autocorrect="off" autocapitalize="none" autocomplete="off"'
     + ' spellcheck="false" enterkeyhint="send"></textarea>'
-    + '<button class="pane-send" aria-label="Send">' + SEND_SVG + '</button></div>';
-  panesContainer.appendChild(el);
+    + '<button class="pane-send" aria-label="Send">' + SEND_SVG + '</button></div>'
+    + '<div class="drop-indicator"></div>';
+  (parentEl || panesContainer).appendChild(el);
   // Pane input handlers
   const ta = el.querySelector('.pane-input textarea');
   const sendBtn = el.querySelector('.pane-send');
@@ -916,18 +925,62 @@ function createPane() {
   sendBtn.addEventListener('click', () => sendToPane(id));
   // Click anywhere on pane to focus it
   el.addEventListener('mousedown', () => focusPane(id));
-  // Drop target
-  el.addEventListener('dragover', e => { e.preventDefault(); el.classList.add('drag-over'); });
-  el.addEventListener('dragleave', () => el.classList.remove('drag-over'));
+  // Drop target with vertical split detection
+  el.addEventListener('dragover', e => {
+    e.preventDefault();
+    const rect = el.getBoundingClientRect();
+    const relY = (e.clientY - rect.top) / rect.height;
+    const indicator = el.querySelector('.drop-indicator');
+    if (relY > 0.65 && panes.length < 6) {
+      indicator.style.top = '50%'; indicator.style.bottom = '0';
+      indicator.style.display = 'block';
+      el.classList.remove('drag-over');
+      el._dropZone = 'bottom';
+    } else if (relY < 0.35 && panes.length < 6 && el.parentElement.classList.contains('pane-stack')) {
+      indicator.style.top = '0'; indicator.style.bottom = '50%';
+      indicator.style.display = 'block';
+      el.classList.remove('drag-over');
+      el._dropZone = 'top';
+    } else {
+      indicator.style.display = 'none';
+      el.classList.add('drag-over');
+      el._dropZone = 'same';
+    }
+  });
+  el.addEventListener('dragleave', () => {
+    el.classList.remove('drag-over');
+    el.querySelector('.drop-indicator').style.display = 'none';
+  });
   el.addEventListener('drop', e => {
     e.preventDefault(); el.classList.remove('drag-over');
+    el.querySelector('.drop-indicator').style.display = 'none';
     const tabId = parseInt(e.dataTransfer.getData('text/plain'));
     if (!tabId) return;
-    moveTabToPane(tabId, id);
+    if (el._dropZone === 'bottom') { splitPaneVertically(id, tabId, 'after'); }
+    else if (el._dropZone === 'top') { splitPaneVertically(id, tabId, 'before'); }
+    else { moveTabToPane(tabId, id); }
   });
   focusPane(id);
   updateLayout();
   return id;
+}
+
+function splitPaneVertically(existingPaneId, tabId, position) {
+  if (panes.length >= 6) return;
+  const existingEl = document.getElementById('pane-' + existingPaneId);
+  if (!existingEl) return;
+  let stack = existingEl.parentElement;
+  if (!stack.classList.contains('pane-stack')) {
+    stack = document.createElement('div');
+    stack.className = 'pane-stack';
+    existingEl.parentElement.insertBefore(stack, existingEl);
+    stack.appendChild(existingEl);
+  }
+  const newId = createPane(stack);
+  if (newId === null) return;
+  const newEl = document.getElementById('pane-' + newId);
+  if (position === 'before' && newEl) stack.insertBefore(newEl, existingEl);
+  moveTabToPane(tabId, newId);
 }
 
 function removePane(paneId) {
@@ -938,7 +991,18 @@ function removePane(paneId) {
   for (const tid of [...pane.tabIds]) closeTab(tid, true);
   panes.splice(idx, 1);
   const el = document.getElementById('pane-' + paneId);
-  if (el) el.remove();
+  if (el) {
+    const stack = el.parentElement;
+    el.remove();
+    // Unwrap stack if only one pane remains
+    if (stack.classList.contains('pane-stack')) {
+      const remaining = stack.querySelectorAll('.pane');
+      if (remaining.length <= 1) {
+        if (remaining.length === 1) stack.parentElement.insertBefore(remaining[0], stack);
+        stack.remove();
+      }
+    }
+  }
   if (activePaneId === paneId) focusPane(panes[0].id);
   updateLayout();
   renderSidebar();
@@ -1157,19 +1221,35 @@ function showActiveTabOutput(paneId) {
 
 // === Layout persistence ===
 let _restoringLayout = false;
+function savePaneData(p) {
+  return {
+    tabIds: p.tabIds.map(tid => {
+      const t = allTabs[tid];
+      return t ? { session: t.session, windowIndex: t.windowIndex, windowName: t.windowName } : null;
+    }).filter(Boolean),
+    activeTab: p.activeTabId ? (() => {
+      const t = allTabs[p.activeTabId];
+      return t ? { session: t.session, windowIndex: t.windowIndex } : null;
+    })() : null,
+  };
+}
 function saveLayout() {
   if (_restoringLayout) return;
   try {
-    const layout = panes.map(p => ({
-      tabIds: p.tabIds.map(tid => {
-        const t = allTabs[tid];
-        return t ? { session: t.session, windowIndex: t.windowIndex, windowName: t.windowName } : null;
-      }).filter(Boolean),
-      activeTab: p.activeTabId ? (() => {
-        const t = allTabs[p.activeTabId];
-        return t ? { session: t.session, windowIndex: t.windowIndex } : null;
-      })() : null,
-    }));
+    const layout = [];
+    for (const child of panesContainer.children) {
+      if (child.classList.contains('pane-stack')) {
+        const stackPanes = [];
+        for (const pEl of child.querySelectorAll('.pane')) {
+          const p = panes.find(x => x.id === parseInt(pEl.id.replace('pane-','')));
+          if (p) stackPanes.push(savePaneData(p));
+        }
+        if (stackPanes.length) layout.push({ stack: stackPanes });
+      } else if (child.classList.contains('pane')) {
+        const p = panes.find(x => x.id === parseInt(child.id.replace('pane-','')));
+        if (p) layout.push(savePaneData(p));
+      }
+    }
     localStorage.setItem('layout', JSON.stringify(layout));
   } catch(e) {}
 }
@@ -1632,35 +1712,58 @@ function windowExists(session, windowIndex) {
   return sess.windows.some(w => w.index === windowIndex);
 }
 
+function restorePaneTabs(paneId, paneData) {
+  for (const t of paneData.tabIds) {
+    if (windowExists(t.session, t.windowIndex)) {
+      createTab(t.session, t.windowIndex, t.windowName, paneId);
+    }
+  }
+  if (paneData.activeTab) {
+    const pane = panes.find(p => p.id === paneId);
+    if (pane) {
+      for (const tid of pane.tabIds) {
+        const tab = allTabs[tid];
+        if (tab && tab.session === paneData.activeTab.session
+            && tab.windowIndex === paneData.activeTab.windowIndex) {
+          focusTab(tid);
+          break;
+        }
+      }
+    }
+  }
+}
 function restoreLayout() {
   _restoringLayout = true;
   try {
     const saved = JSON.parse(localStorage.getItem('layout'));
     if (!saved || !saved.length) { _restoringLayout = false; return false; }
-    // Validate at least one tab still exists in tmux
-    const anyValid = saved.some(p => p.tabIds.some(t => windowExists(t.session, t.windowIndex)));
-    if (!anyValid) { _restoringLayout = false; return false; }
-    for (const paneData of saved) {
-      const paneId = createPane();
-      if (!paneId) break;
-      for (const t of paneData.tabIds) {
-        if (windowExists(t.session, t.windowIndex)) {
-          createTab(t.session, t.windowIndex, t.windowName, paneId);
-        }
+    // Validate: check both flat panes and stacked panes
+    function flatPanes(layout) {
+      const out = [];
+      for (const item of layout) {
+        if (item.stack) out.push(...item.stack);
+        else out.push(item);
       }
-      // Restore active tab
-      if (paneData.activeTab) {
-        const pane = panes.find(p => p.id === paneId);
-        if (pane) {
-          for (const tid of pane.tabIds) {
-            const tab = allTabs[tid];
-            if (tab && tab.session === paneData.activeTab.session
-                && tab.windowIndex === paneData.activeTab.windowIndex) {
-              focusTab(tid);
-              break;
-            }
-          }
+      return out;
+    }
+    const allPaneData = flatPanes(saved);
+    const anyValid = allPaneData.some(p => p.tabIds && p.tabIds.some(t => windowExists(t.session, t.windowIndex)));
+    if (!anyValid) { _restoringLayout = false; return false; }
+    for (const item of saved) {
+      if (item.stack) {
+        // Create a vertical stack
+        const stack = document.createElement('div');
+        stack.className = 'pane-stack';
+        panesContainer.appendChild(stack);
+        for (const pd of item.stack) {
+          const paneId = createPane(stack);
+          if (!paneId) break;
+          restorePaneTabs(paneId, pd);
         }
+      } else {
+        const paneId = createPane();
+        if (!paneId) break;
+        restorePaneTabs(paneId, item);
       }
     }
     _restoringLayout = false;
