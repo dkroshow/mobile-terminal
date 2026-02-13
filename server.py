@@ -914,6 +914,8 @@ function createPane() {
   ta.addEventListener('input', () => { ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,80)+'px'; });
   ta.addEventListener('keydown', e => { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); sendToPane(id); } });
   sendBtn.addEventListener('click', () => sendToPane(id));
+  // Click anywhere on pane to focus it
+  el.addEventListener('mousedown', () => focusPane(id));
   // Drop target
   el.addEventListener('dragover', e => { e.preventDefault(); el.classList.add('drag-over'); });
   el.addEventListener('dragleave', () => el.classList.remove('drag-over'));
