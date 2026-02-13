@@ -12,6 +12,9 @@
 - **2026-02-11**: Tab-based window management, chat parser rewrite, instant message feedback
 - **2026-02-10**: Added launchd LaunchAgent for always-on server
 
+## Recently Completed (cont.)
+- **2026-02-12**: Per-window notepad — dropdown panel in pane tab bar (pencil ✎ icon), slides down from top-right with transition. Textarea persists to localStorage keyed by `notepad:session:windowIndex`. Updates on tab switch. Click-outside-to-close.
+
 ## Active Work
 None
 

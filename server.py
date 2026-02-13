@@ -309,8 +309,6 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   border-radius:8px; cursor:pointer; transition:all .12s;
   -webkit-user-select:none; user-select:none; }
 .sb-win:hover { background:var(--surface); }
-.sb-win.has-tab { background:rgba(217,119,87,0.08); }
-.sb-win.has-tab:hover { background:rgba(217,119,87,0.15); }
 .sb-win-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
 .sb-win-dot.idle { background:var(--green); }
 .sb-win-dot.working { background:var(--orange); animation:pulse 1.5s ease-in-out infinite; }
@@ -374,7 +372,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 
 /* --- Pane --- */
 .pane { display:flex; flex-direction:column; min-width:0; overflow:hidden; flex:1;
-  border-right:1px solid var(--border2); }
+  border-right:1px solid var(--border2); position:relative; }
 .pane:last-child { border-right:none; }
 .pane.drag-over { outline:2px solid var(--accent); outline-offset:-2px; }
 .pane.focused .pane-tab-bar { border-bottom-color:var(--accent); }
@@ -403,6 +401,26 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   font-size:14px; cursor:pointer; padding:2px 4px; margin-left:auto;
   flex-shrink:0; border-radius:3px; }
 .pane-close-btn:hover { color:var(--red); background:rgba(255,255,255,0.05); }
+.pane-notepad-btn { background:none; border:none; color:var(--text3);
+  font-size:13px; cursor:pointer; padding:2px 4px; margin-left:auto;
+  flex-shrink:0; border-radius:3px; }
+.pane-notepad-btn:hover { color:var(--accent); background:rgba(255,255,255,0.05); }
+.notepad-panel { position:absolute; top:30px; right:0; z-index:10;
+  width:min(320px, 90%); max-height:60%; background:var(--bg2);
+  border:1px solid var(--border2); border-radius:0 0 0 12px;
+  display:flex; flex-direction:column; overflow:hidden;
+  transform:translateY(-10px); opacity:0; pointer-events:none;
+  transition:transform .15s ease, opacity .15s ease; }
+.notepad-panel.open { transform:translateY(0); opacity:1; pointer-events:auto; }
+.notepad-header { display:flex; align-items:center; justify-content:space-between;
+  padding:8px 12px; border-bottom:1px solid var(--border); flex-shrink:0; }
+.notepad-header span { font-size:12px; font-weight:600; color:var(--text2); }
+.notepad-close { background:none; border:none; color:var(--text3); cursor:pointer;
+  font-size:14px; padding:0 4px; }
+.notepad-close:hover { color:var(--text); }
+.notepad-panel textarea { flex:1; background:transparent; color:var(--text);
+  border:none; padding:10px 12px; font-size:13px; font-family:inherit;
+  resize:none; outline:none; line-height:1.5; min-height:100px; }
 
 /* Pane output */
 .pane-output { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; }
@@ -1009,6 +1027,7 @@ function focusTab(tabId) {
       focusPane(p.id);
       renderPaneTabs(p.id);
       showActiveTabOutput(p.id);
+      updateNotepadContent(p.id);
       updatePolling();
       // Update view label
       const state = tabStates[tabId];
@@ -1084,6 +1103,10 @@ function renderPaneTabs(paneId) {
       + '<span class="pane-tab-close" onclick="event.stopPropagation();closeTab(' + tid + ')">&times;</span>'
       + '</div>';
   }
+  // Notepad toggle button (only if pane has an active tab)
+  if (pane.activeTabId) {
+    html += '<button class="pane-notepad-btn" onclick="toggleNotepad(' + paneId + ')" title="Notepad">&#9998;</button>';
+  }
   // Close pane button (only if >1 pane)
   if (panes.length > 1) {
     html += '<button class="pane-close-btn" onclick="removePane(' + paneId + ')" title="Close pane">&times;</button>';
@@ -1110,6 +1133,69 @@ function showActiveTabOutput(paneId) {
     const outEl = document.getElementById('tab-output-' + pane.activeTabId);
     if (outEl) outEl.style.display = '';
   }
+}
+
+// === Notepad ===
+function notepadKey(tabId) {
+  const tab = allTabs[tabId];
+  if (!tab) return null;
+  return 'notepad:' + tab.session + ':' + tab.windowIndex;
+}
+
+function toggleNotepad(paneId) {
+  const paneEl = document.getElementById('pane-' + paneId);
+  if (!paneEl) return;
+  let panel = paneEl.querySelector('.notepad-panel');
+  if (panel && panel.classList.contains('open')) {
+    panel.classList.remove('open');
+    return;
+  }
+  const pane = panes.find(p => p.id === paneId);
+  if (!pane || !pane.activeTabId) return;
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.className = 'notepad-panel';
+    panel.innerHTML = '<div class="notepad-header"><span>Notepad</span>'
+      + '<button class="notepad-close" onclick="this.closest(&apos;.notepad-panel&apos;).classList.remove(&apos;open&apos;)">&times;</button></div>'
+      + '<textarea placeholder="Jot notes for this window..."></textarea>';
+    panel.querySelector('textarea').addEventListener('input', function() {
+      const pn = panes.find(x => x.id === paneId);
+      if (!pn || !pn.activeTabId) return;
+      const key = notepadKey(pn.activeTabId);
+      if (key) try { localStorage.setItem(key, this.value); } catch(e) {}
+    });
+    paneEl.appendChild(panel);
+    // Close on click outside
+    document.addEventListener('click', function handler(e) {
+      if (!panel.classList.contains('open')) return;
+      if (panel.contains(e.target)) return;
+      // Don't close if clicking the toggle button itself
+      if (e.target.closest('.pane-notepad-btn') && e.target.closest('#pane-' + paneId)) return;
+      panel.classList.remove('open');
+    });
+  }
+  // Load content for active tab
+  const key = notepadKey(pane.activeTabId);
+  const ta = panel.querySelector('textarea');
+  if (key) {
+    try { ta.value = localStorage.getItem(key) || ''; } catch(e) { ta.value = ''; }
+  } else { ta.value = ''; }
+  panel.classList.add('open');
+  ta.focus();
+}
+
+function updateNotepadContent(paneId) {
+  const paneEl = document.getElementById('pane-' + paneId);
+  if (!paneEl) return;
+  const panel = paneEl.querySelector('.notepad-panel');
+  if (!panel || !panel.classList.contains('open')) return;
+  const pane = panes.find(p => p.id === paneId);
+  if (!pane || !pane.activeTabId) return;
+  const key = notepadKey(pane.activeTabId);
+  const ta = panel.querySelector('textarea');
+  if (key) {
+    try { ta.value = localStorage.getItem(key) || ''; } catch(e) { ta.value = ''; }
+  } else { ta.value = ''; }
 }
 
 // === Layout ===
@@ -1290,22 +1376,18 @@ function renderSidebar() {
   const data = _dashboardData;
   if (!data) return;
   const content = document.getElementById('sidebar-content');
-  // Check which tabs are open
-  const openSet = new Set();
-  for (const tid in allTabs) { const t = allTabs[tid]; openSet.add(t.session + ':' + t.windowIndex); }
   let html = '';
   for (const s of data.sessions) {
     html += '<div class="sb-session">';
     html += '<div class="sb-session-header">' + esc(s.name)
       + (s.attached ? ' <span class="sb-badge">attached</span>' : '') + '</div>';
     for (const w of s.windows) {
-      const hasTab = openSet.has(s.name + ':' + w.index);
       const dotClass = w.is_cc ? (w.cc_status || 'idle') : 'none';
       let status = w.is_cc ? statusLabel(w.cc_status) : '';
       if (w.cc_context_pct != null) status += ' ' + w.cc_context_pct + '%';
       const statusClass = w.is_cc ? (w.cc_status || 'idle') : '';
       const wid = esc(s.name) + ':' + w.index;
-      html += '<div class="sb-win' + (hasTab ? ' has-tab' : '') + '">'
+      html += '<div class="sb-win">'
         + '<div class="sb-win-dot ' + dotClass + '" data-wid="' + wid + '" onclick="event.stopPropagation();openTab(\\'' + esc(s.name).replace(/'/g, "\\\\'") + '\\',' + w.index + ',\\'' + esc(w.name).replace(/'/g, "\\\\'") + '\\')"></div>'
         + '<div class="sb-win-info" onclick="openTab(\\'' + esc(s.name).replace(/'/g, "\\\\'") + '\\',' + w.index + ',\\'' + esc(w.name).replace(/'/g, "\\\\'") + '\\')">'
         + '<div class="sb-win-name">' + esc(w.name) + '</div>'
