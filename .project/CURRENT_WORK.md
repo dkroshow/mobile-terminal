@@ -33,6 +33,8 @@
 ## Recently Completed (cont. 3)
 - **2026-02-12**: Sidebar resize — draggable 4px handle between sidebar and main area (col-resize cursor, accent highlight on hover/drag). Width persisted to `localStorage sidebar:width`. Hidden on mobile and when sidebar collapsed.
 - **2026-02-12**: Task Queue enhancements — dispatched tasks prepend "please execute this task: "; drag reorder via grip handles (pointer events, works on mobile); inline edit (click text to edit, Enter/Escape/blur to save/cancel); re-render guard skips `renderQueuePanel` while `.qi-edit` input exists to prevent polling from destroying mid-edit.
+- **2026-02-12**: Context remaining display — color-coded context % in sidebar (green/orange/red) and progress bar in details modal. Already plumbed end-to-end; CC only reports % when context is low.
+- **2026-02-12**: Large text paste fix — `send_keys()` now uses `tmux set-buffer` + `paste-buffer` for text >500 chars or containing newlines, instead of `send-keys -l` which was unreliable for large blocks.
 
 ## Active Work
 None

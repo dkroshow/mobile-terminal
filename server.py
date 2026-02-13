@@ -52,8 +52,15 @@ def send_keys(text: str, session=None, window=None):
     target = _tmux_target(session, window)
     # Clear any existing input on the line before sending (Ctrl-U + Ctrl-K)
     subprocess.run(["tmux", "send-keys", "-t", target, "C-u"])
-    subprocess.run(["tmux", "send-keys", "-t", target, "-l", text])
-    subprocess.run(["tmux", "send-keys", "-t", target, "Enter"])
+    # For large text, use set-buffer + paste-buffer for reliable delivery
+    if len(text) > 500 or '\n' in text:
+        buf_name = "_mt_paste"
+        subprocess.run(["tmux", "set-buffer", "-b", buf_name, text])
+        subprocess.run(["tmux", "paste-buffer", "-d", "-b", buf_name, "-t", target])
+        subprocess.run(["tmux", "send-keys", "-t", target, "Enter"])
+    else:
+        subprocess.run(["tmux", "send-keys", "-t", target, "-l", text])
+        subprocess.run(["tmux", "send-keys", "-t", target, "Enter"])
 
 
 def send_special(key: str, session=None, window=None):
@@ -330,6 +337,9 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .sb-win-status.working, .sb-win-status.thinking { color:var(--orange); }
 .sb-win-status.waiting { color:var(--accent); }
 .sb-win-status.idle { color:var(--green); }
+.sb-ctx { display:inline-block; font-size:9px; color:var(--text3); margin-left:4px; }
+.sb-ctx.low { color:var(--orange); font-weight:700; }
+.sb-ctx.critical { color:var(--red); font-weight:700; }
 .sb-win-detail-btn { background:none; border:none; color:var(--text3);
   font-size:16px; cursor:pointer; padding:2px 4px; border-radius:4px;
   flex-shrink:0; opacity:0; transition:opacity .15s; line-height:1; }
@@ -854,10 +864,13 @@ function updateSidebarStatus(session, windowIndex, ccStatus, contextPct) {
   const lbl = document.querySelector('.sb-win-status[data-wid="' + wid + '"]');
   if (dot) { dot.className = 'sb-win-dot ' + (ccStatus || 'idle'); }
   if (lbl) {
-    let text = statusLabel(ccStatus);
-    if (contextPct != null) text += ' ' + contextPct + '%';
     lbl.className = 'sb-win-status ' + (ccStatus || 'idle');
-    lbl.textContent = text;
+    let html = statusLabel(ccStatus);
+    if (contextPct != null) {
+      const cls = contextPct <= 10 ? 'critical' : contextPct <= 25 ? 'low' : '';
+      html += '<span class="sb-ctx ' + cls + '">' + contextPct + '%</span>';
+    }
+    lbl.innerHTML = html;
   }
 }
 
@@ -2072,7 +2085,10 @@ function renderSidebar() {
     for (const w of windows) {
       const dotClass = w.is_cc ? (w.cc_status || 'idle') : 'none';
       let status = w.is_cc ? statusLabel(w.cc_status) : '';
-      if (w.cc_context_pct != null) status += ' ' + w.cc_context_pct + '%';
+      if (w.cc_context_pct != null) {
+        const cls = w.cc_context_pct <= 10 ? 'critical' : w.cc_context_pct <= 25 ? 'low' : '';
+        status += '<span class="sb-ctx ' + cls + '">' + w.cc_context_pct + '%</span>';
+      }
       const statusClass = w.is_cc ? (w.cc_status || 'idle') : '';
       const wid = esc(s.name) + ':' + w.index;
       html += '<div class="sb-win" draggable="true" data-session="' + esc(s.name) + '" data-widx="' + w.index + '">'
@@ -2212,9 +2228,16 @@ function openWD(session, windowIndex) {
   html += '<div class="wd-row"><span class="wd-label">PID</span><span class="wd-value">' + esc(win.pid || '') + '</span></div>';
   html += '<div class="wd-row"><span class="wd-label">Command</span><span class="wd-value">' + esc(win.command) + '</span></div>';
   if (win.is_cc) {
-    let ccInfo = statusLabel(win.cc_status);
-    if (win.cc_context_pct != null) ccInfo += ' \\u00b7 Context: ' + win.cc_context_pct + '%';
-    html += '<div class="wd-row"><span class="wd-label">Status</span><span class="wd-value">' + ccInfo + '</span></div>';
+    html += '<div class="wd-row"><span class="wd-label">Status</span><span class="wd-value">' + statusLabel(win.cc_status) + '</span></div>';
+    const pct = win.cc_context_pct;
+    const ctxLabel = pct != null ? pct + '%' : 'Healthy';
+    const barColor = pct != null && pct <= 10 ? 'var(--red)' : pct != null && pct <= 25 ? 'var(--orange)' : 'var(--green)';
+    const barWidth = pct != null ? pct : 100;
+    html += '<div class="wd-row"><span class="wd-label">Context</span><span class="wd-value">'
+      + '<span style="margin-right:8px">' + ctxLabel + '</span>'
+      + '<span style="display:inline-block;width:80px;height:6px;background:var(--surface);border-radius:3px;vertical-align:middle">'
+      + '<span style="display:block;width:' + barWidth + '%;height:100%;background:' + barColor + ';border-radius:3px"></span>'
+      + '</span></span></div>';
   }
   document.getElementById('wd-content').innerHTML = html;
   document.getElementById('wd-rename-input').value = win.name;
