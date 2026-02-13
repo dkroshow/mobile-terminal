@@ -875,8 +875,8 @@ function renderOutput(raw, targetEl, state) {
       if (t.role === 'user') {
         html += '<div class="turn user"><div class="turn-label">You</div><div class="turn-body">' + esc(text) + '</div></div>';
       } else {
-        const label = lastRole !== 'assistant' ? 'Claude' : '';
-        html += '<div class="turn assistant"><div class="turn-label">' + label + '</div><div class="turn-body">' + md(text) + '</div></div>';
+        const label = lastRole !== 'assistant' ? '<div class="turn-label">Claude</div>' : '';
+        html += '<div class="turn assistant">' + label + '<div class="turn-body">' + md(text) + '</div></div>';
       }
       lastRole = t.role;
     }
