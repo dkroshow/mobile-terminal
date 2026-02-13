@@ -180,11 +180,11 @@ def get_dashboard() -> dict:
             activity_age = now - int(wactivity)
         except (ValueError, TypeError):
             activity_age = None
-        # Get preview for CC detection (20 lines for better signal coverage)
-        preview = get_pane_preview(sname, int(widx), lines=20)
+        # Get preview for CC detection and sidebar snippet (40 lines)
+        preview = get_pane_preview(sname, int(widx), lines=40)
         cc = detect_cc_status(preview, activity_age=activity_age)
-        # Trim preview to last 5 lines for response
-        preview_short = '\n'.join(preview.split('\n')[-5:])
+        # Send last 40 lines for sidebar snippet extraction
+        preview_short = '\n'.join(preview.split('\n')[-40:])
         sessions[sname]["windows"].append({
             "index": int(widx),
             "name": wname,
@@ -356,6 +356,17 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .sb-ctx.critical { color:var(--red); font-weight:700; }
 .sb-perm { font-size:9px; color:var(--text3); margin-top:1px; }
 .sb-perm.danger { color:var(--red); font-weight:600; }
+.sb-snippet { font-size:10px; color:var(--text3); margin-top:2px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  max-width:180px; font-style:italic; }
+.sb-memo { font-size:10px; color:var(--accent); margin-top:2px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  max-width:180px; cursor:text; min-height:14px; }
+.sb-memo:empty::before { content:'+ note'; color:var(--text3); opacity:0.5;
+  font-style:italic; }
+.sb-memo-edit { font-size:10px; color:var(--text); background:var(--surface2);
+  border:1px solid var(--accent); border-radius:4px; padding:2px 4px;
+  width:100%; margin-top:2px; outline:none; font-family:inherit; }
 .sb-win-detail-btn { background:none; border:none; color:var(--text3);
   font-size:16px; cursor:pointer; padding:2px 4px; border-radius:4px;
   flex-shrink:0; opacity:0; transition:opacity .15s; line-height:1; }
@@ -870,6 +881,75 @@ function statusLabel(cc_status) {
   if (cc_status === 'idle') return 'Standby';
   return '';
 }
+function extractSnippet(preview, isCC) {
+  // Extract a short snippet of the latest Claude response from terminal preview
+  if (!preview) return '';
+  const lines = preview.split('\\n');
+  if (isCC) {
+    // Find the last ⏺ line that isn't a tool call
+    let lastIdx = -1;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const t = lines[i].replace(/\\u00a0/g, ' ').trim();
+      if (/^\\u23fa/.test(t)) {
+        const after = t.replace(/^\\u23fa\\s*/, '');
+        if (!/^(Bash|Read|Write|Update|Edit|Fetch|Search|Glob|Grep|Task|Skill|NotebookEdit|Searched for|Wrote \\d)/.test(after)) {
+          lastIdx = i; break;
+        }
+      }
+    }
+    if (lastIdx < 0) return '';
+    // Collect text from this ⏺ line forward until we hit a stop marker
+    let snippetLines = [];
+    for (let i = lastIdx; i < lines.length; i++) {
+      const raw = lines[i].replace(/\\u00a0/g, ' ');
+      const t = raw.trim();
+      if (/^\\u276f/.test(raw)) break;
+      if (/^\\s*\\u23f5/.test(t)) break;
+      if (/^[\\u2500\\u2501\\u2504\\u2508\\u2550]{3,}$/.test(t) && t.length > 20) break;
+      if (/^[\\u2720-\\u273f]/.test(t)) break;
+      if (/^\\u23bf/.test(t)) break;
+      if (/^\\u23fa/.test(t)) {
+        const after = t.replace(/^\\u23fa\\s*/, '');
+        if (/^(Bash|Read|Write|Update|Edit|Fetch|Search|Glob|Grep|Task|Skill|NotebookEdit|Searched for|Wrote \\d)/.test(after)) break;
+        if (after) snippetLines.push(after);
+      } else if (t) snippetLines.push(t);
+    }
+    return snippetLines.join(' ').substring(0, 120);
+  }
+  return '';
+}
+function getMemo(session, windowIndex) {
+  return localStorage.getItem('memo:' + session + ':' + windowIndex) || '';
+}
+function setMemo(session, windowIndex, text) {
+  const key = 'memo:' + session + ':' + windowIndex;
+  if (text) localStorage.setItem(key, text);
+  else localStorage.removeItem(key);
+}
+function startMemoEdit(el, session, windowIndex) {
+  if (el.querySelector('.sb-memo-edit')) return;
+  const current = getMemo(session, windowIndex);
+  const input = document.createElement('input');
+  input.className = 'sb-memo-edit';
+  input.value = current;
+  input.placeholder = 'Add a note...';
+  const memoEl = el;
+  memoEl.textContent = '';
+  memoEl.appendChild(input);
+  input.focus();
+  const save = () => {
+    const val = input.value.trim();
+    setMemo(session, windowIndex, val);
+    memoEl.textContent = val;
+  };
+  input.addEventListener('blur', save);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { input.value = getMemo(session, windowIndex); input.blur(); }
+    e.stopPropagation();
+  });
+  input.addEventListener('click', (e) => e.stopPropagation());
+}
 function detectCCStatus(text) {
   // Quick client-side CC status detection from output text
   // Returns {status, contextPct, permMode} or null
@@ -928,7 +1008,7 @@ function cleanTerminal(raw) {
   text = text.replace(/\\n{3,}/g, '\\n\\n');
   return text.trim();
 }
-function isClaudeCode(text) { return /\\u276f/.test(text) && /\\u23fa/.test(text); }
+function isClaudeCode(text) { return /\\u276f/.test(text) && (/\\u23fa/.test(text) || /Claude Code v\\d/.test(text)); }
 function isIdle(text) {
   const lines = text.split('\\n');
   // Check status bar (last line starting with ⏵) for "esc to interrupt"
@@ -974,6 +1054,8 @@ function parseCCTurns(text) {
     if (/^\\u276f/.test(raw)) {
       if (cur) turns.push(cur);
       const msg = t.replace(/^\\u276f\\s*/, '').trim();
+      // Skip CC slash commands (/clear, /help, etc.) — they're meta, not conversation
+      if (msg.startsWith('/')) { cur = null; inTool = false; sawStatus = false; continue; }
       cur = { role: 'user', lines: msg ? [msg] : [] }; inTool = false; sawStatus = false; continue;
     }
     if (/^\\u23fa/.test(t)) {
@@ -1046,7 +1128,11 @@ function renderOutput(raw, targetEl, state, tabId) {
     if (state.awaitingResponse) {
       const elapsed = Date.now() - state.pendingTime;
       if (elapsed > 3000 && isIdle(clean)) state.awaitingResponse = false;
-      if (elapsed > 3000 && state.lastOutputChange > 0 && (Date.now() - state.lastOutputChange) > 5000) state.awaitingResponse = false;
+      // Staleness fallback for interactive menus (status bar still shows "esc to interrupt"
+      // but CC is actually waiting for input). Only fire after 30s to avoid false positives
+      // during extended thinking or long tool executions.
+      const staleAge = state.lastOutputChange > 0 ? Date.now() - state.lastOutputChange : 0;
+      if (elapsed > 5000 && staleAge > 30000) state.awaitingResponse = false;
       if (elapsed > 180000) state.awaitingResponse = false;
     }
     if (wasAwaiting && !state.awaitingResponse && tabId) {
@@ -1068,6 +1154,8 @@ function renderOutput(raw, targetEl, state, tabId) {
       html += '<div class="turn user"><div class="turn-label">You</div><div class="turn-body">' + esc(state.pendingMsg) + '</div></div>';
     if (state.awaitingResponse || !isIdle(clean))
       html += '<div class="turn assistant"><div class="turn-label">Claude</div><div class="turn-body"><p class="thinking">Working\\u2026</p></div></div>';
+    if (!html)
+      html = '<div class="turn assistant"><div class="turn-label">Claude</div><div class="turn-body"><p style="color:var(--text3)">Ready</p></div></div>';
   } else {
     if (clean.trim())
       html = '<div class="turn assistant"><div class="turn-label">Terminal</div><div class="turn-body mono">' + esc(clean) + '</div></div>';
@@ -2275,6 +2363,8 @@ function renderSidebar() {
   const data = _dashboardData;
   if (!data) return;
   const content = document.getElementById('sidebar-content');
+  // Don't re-render while editing a memo
+  if (content.querySelector('.sb-memo-edit')) return;
   // Sort sessions by custom order
   const sessions = [...data.sessions].sort((a, b) => {
     const ia = _sidebarOrder.sessions.indexOf(a.name);
@@ -2312,15 +2402,21 @@ function renderSidebar() {
       const statusClass = w.is_cc ? (w.cc_status || 'idle') : '';
       const wid = esc(s.name) + ':' + w.index;
       const isActive = activeTab && activeTab.session === s.name && activeTab.windowIndex === w.index;
+      const snippet = (w.is_cc && w.cc_status === 'idle') ? extractSnippet(w.preview, true) : '';
+      const memo = getMemo(s.name, w.index);
+      const sEsc = esc(s.name).replace(/'/g, "\\\\'");
+      const wEsc = esc(w.name).replace(/'/g, "\\\\'");
       html += '<div class="sb-win' + (isActive ? ' active' : '') + '" draggable="true" data-session="' + esc(s.name) + '" data-widx="' + w.index + '">'
-        + '<div class="sb-win-dot ' + dotClass + '" data-wid="' + wid + '" onclick="event.stopPropagation();openTab(\\'' + esc(s.name).replace(/'/g, "\\\\'") + '\\',' + w.index + ',\\'' + esc(w.name).replace(/'/g, "\\\\'") + '\\')"></div>'
-        + '<div class="sb-win-info" onclick="openTab(\\'' + esc(s.name).replace(/'/g, "\\\\'") + '\\',' + w.index + ',\\'' + esc(w.name).replace(/'/g, "\\\\'") + '\\')">'
+        + '<div class="sb-win-dot ' + dotClass + '" data-wid="' + wid + '" onclick="event.stopPropagation();openTab(\\'' + sEsc + '\\',' + w.index + ',\\'' + wEsc + '\\')"></div>'
+        + '<div class="sb-win-info" onclick="openTab(\\'' + sEsc + '\\',' + w.index + ',\\'' + wEsc + '\\')">'
         + '<div class="sb-win-name">' + esc(w.name) + '</div>'
         + '<div class="sb-win-cwd">' + esc(abbreviateCwd(w.cwd)) + '</div>'
         + (w.is_cc ? '<div class="sb-perm' + (w.cc_perm_mode && /dangerously|skip/i.test(w.cc_perm_mode) ? ' danger' : '') + '" data-wid="' + wid + '">' + (w.cc_perm_mode ? esc(w.cc_perm_mode) : '') + '</div>' : '')
+        + (snippet ? '<div class="sb-snippet" title="' + esc(snippet) + '">' + esc(snippet) + '</div>' : '')
+        + '<div class="sb-memo" data-wid="' + wid + '" onclick="event.stopPropagation();startMemoEdit(this,\\'' + sEsc + '\\',' + w.index + ')">' + esc(memo) + '</div>'
         + '</div>'
         + '<div class="sb-win-status ' + statusClass + '" data-wid="' + wid + '">' + status + '</div>'
-        + '<button class="sb-win-detail-btn" onclick="event.stopPropagation();openWD(\\'' + esc(s.name).replace(/'/g, "\\\\'") + '\\',' + w.index + ')" title="Details">&#8942;</button>'
+        + '<button class="sb-win-detail-btn" onclick="event.stopPropagation();openWD(\\'' + sEsc + '\\',' + w.index + ')" title="Details">&#8942;</button>'
         + '</div>';
     }
     html += '</div>';

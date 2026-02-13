@@ -58,6 +58,12 @@
 - **2026-02-13**: Sidebar active window highlight — active tab's window gets subtle warm tint (`rgba(217,119,87,0.08)`); updates on pane focus and tab switch
 - **2026-02-13**: Working indicator after hard refresh — "Working..." shows in Clean view when `!isIdle(clean)` (detects working CC from terminal output), not just when `awaitingResponse` flag is set
 
+## Recently Completed (cont. 7)
+- **2026-02-13**: Clean view formatting — `isClaudeCode()` now detects CC by banner ("Claude Code v\d") in addition to `⏺`, so fresh/cleared sessions render correctly. CC slash commands (`/clear`, `/help`) filtered from user turns. Empty CC state shows "Ready" card instead of raw banner dump.
+- **2026-02-13**: Queue premature dispatch fix — output staleness threshold 5s→30s. Was clearing `awaitingResponse` too early during extended thinking or long tool executions, causing queue to dispatch next task while CC was still working.
+- **2026-02-13**: Sidebar snippet — `extractSnippet()` finds last `⏺` block in 40-line preview, shows first line as italic truncated text below perm mode for idle CC windows.
+- **2026-02-13**: Sidebar memo — per-window editable note (`localStorage memo:session:windowIndex`). Click "+ note" to add; inline edit with Enter/Escape/blur save. `renderSidebar()` guard skips re-render during edit.
+
 ## Active Work
 None
 
