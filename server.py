@@ -1516,7 +1516,7 @@ function saveWDRename() {
   if (!name) return;
   fetch('/api/windows/' + _wdWindow, {
     method:'PUT', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({name: name})
+    body: JSON.stringify({name: name, session: _wdSession})
   }).then(() => {
     // Update tab name if open
     for (const tid in allTabs) {
@@ -1536,7 +1536,7 @@ function saveWDRename() {
 function closeWDWindow() {
   if (!_wdSession || _wdWindow === null) return;
   if (!confirm('Close this window?')) return;
-  fetch('/api/windows/' + _wdWindow, {method:'DELETE'}).then(() => {
+  fetch('/api/windows/' + _wdWindow + '?session=' + encodeURIComponent(_wdSession), {method:'DELETE'}).then(() => {
     // Close tab if open
     for (const tid in allTabs) {
       const t = allTabs[tid];
@@ -1761,8 +1761,9 @@ async def api_reset_window_name():
 @app.put("/api/windows/{index}")
 async def api_rename_window(index: int, body: dict):
     name = body.get("name", "").strip()
+    session = body.get("session", _current_session)
     if name:
-        target = f"{_current_session}:{index}"
+        target = f"{session}:{index}"
         subprocess.run(["tmux", "rename-window", "-t", target, name])
         subprocess.run(["tmux", "set-window-option", "-t", target, "allow-rename", "off"])
         subprocess.run(["tmux", "set-window-option", "-t", target, "automatic-rename", "off"])
@@ -1770,8 +1771,9 @@ async def api_rename_window(index: int, body: dict):
 
 
 @app.delete("/api/windows/{index}")
-async def api_close_window(index: int):
-    subprocess.run(["tmux", "kill-window", "-t", f"{_current_session}:{index}"])
+async def api_close_window(index: int, session: str = None):
+    sess = session or _current_session
+    subprocess.run(["tmux", "kill-window", "-t", f"{sess}:{index}"])
     return JSONResponse({"ok": True})
 
 
