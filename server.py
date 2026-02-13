@@ -56,8 +56,9 @@ def send_keys(text: str, session=None, window=None):
     # -p enables bracketed paste so TUI apps (CC) treat it as a single paste, not line-by-line input
     if len(text) > 500 or '\n' in text:
         buf_name = "_mt_paste"
-        subprocess.run(["tmux", "set-buffer", "-b", buf_name, text])
+        subprocess.run(["tmux", "load-buffer", "-b", buf_name, "-"], input=text.encode())
         subprocess.run(["tmux", "paste-buffer", "-d", "-p", "-b", buf_name, "-t", target])
+        time.sleep(0.05)  # Let TUI process bracketed paste before sending Enter
         subprocess.run(["tmux", "send-keys", "-t", target, "Enter"])
     else:
         subprocess.run(["tmux", "send-keys", "-t", target, "-l", text])
@@ -331,6 +332,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   border-radius:8px; cursor:pointer; transition:all .12s;
   -webkit-user-select:none; user-select:none; }
 .sb-win:hover { background:var(--surface); }
+.sb-win.active { background:rgba(217,119,87,0.08); }
 .sb-win.sb-drag-over { border-top:2px solid var(--accent); margin-top:-2px; }
 .sb-win.dragging { opacity:0.4; }
 .sb-win-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
@@ -516,8 +518,12 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   font-size:13px; color:var(--text); border-left:3px solid transparent; position:relative; }
 .queue-item.current { border-left-color:var(--accent); background:rgba(217,119,87,0.08); }
 .queue-item.done { opacity:0.45; }
-.queue-section { font-size:10px; font-weight:600; color:var(--text3); text-transform:uppercase;
-  letter-spacing:0.5px; padding:6px 10px 2px; }
+.queue-tabs { display:flex; gap:0; flex-shrink:0; }
+.queue-tab { flex:1; background:none; border:none; border-bottom:2px solid transparent;
+  color:var(--text3); font-size:11px; font-weight:600; padding:6px 8px; cursor:pointer;
+  text-transform:uppercase; letter-spacing:0.3px; transition:color .15s, border-color .15s; }
+.queue-tab:hover { color:var(--text2); }
+.queue-tab.active { color:var(--text); border-bottom-color:var(--accent); }
 .queue-item.qi-dragging { opacity:0.3; }
 .queue-item.qi-over { box-shadow:0 -2px 0 var(--accent); }
 .qi-grip { cursor:grab; color:var(--text3); font-size:11px; padding:4px 2px;
@@ -1002,10 +1008,25 @@ function parseCCTurns(text) {
 }
 
 // === Render output into target element ===
+function stripSuggestion(raw) {
+  if (!/\\u276f/.test(raw) || !/\\u23fa/.test(raw)) return raw;
+  const clean = cleanTerminal(raw);
+  if (!isIdle(clean)) return raw;
+  // Find the last ❯ prompt line and strip ghost suggestion text after it
+  const lines = raw.split('\\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const s = lines[i].replace(/\\u00a0/g, ' ');
+    if (/\\u276f/.test(s)) {
+      lines[i] = lines[i].replace(/(\\u276f)\\s*.*/, '$1');
+      break;
+    }
+  }
+  return lines.join('\\n');
+}
 function renderOutput(raw, targetEl, state, tabId) {
   if (state.rawMode) {
     targetEl.className = 'pane-output raw';
-    targetEl.textContent = raw;
+    targetEl.textContent = stripSuggestion(raw);
     return;
   }
   targetEl.className = 'pane-output chat';
@@ -1045,7 +1066,7 @@ function renderOutput(raw, targetEl, state, tabId) {
     }
     if (state.pendingMsg)
       html += '<div class="turn user"><div class="turn-label">You</div><div class="turn-body">' + esc(state.pendingMsg) + '</div></div>';
-    if (state.awaitingResponse)
+    if (state.awaitingResponse || !isIdle(clean))
       html += '<div class="turn assistant"><div class="turn-label">Claude</div><div class="turn-body"><p class="thinking">Working\\u2026</p></div></div>';
   } else {
     if (clean.trim())
@@ -1075,7 +1096,9 @@ function createPane(parentEl) {
   // Pane input handlers
   const ta = el.querySelector('.pane-input textarea');
   const sendBtn = el.querySelector('.pane-send');
-  ta.addEventListener('input', () => { const max=window.innerHeight*0.4; ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,max)+'px'; ta.style.overflowY=ta.scrollHeight>max?'auto':'hidden'; });
+  const paneResize = () => { const max=window.innerHeight*0.4; ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,max)+'px'; ta.style.overflowY=ta.scrollHeight>max?'auto':'hidden'; };
+  ta.addEventListener('input', paneResize);
+  ta.addEventListener('paste', () => setTimeout(paneResize, 0));
   ta.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (ta.value.trim()) sendToPane(id); else keyActive('Enter'); }
     if (!ta.value && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); keyActive(e.key === 'ArrowUp' ? 'Up' : 'Down'); }
@@ -1170,10 +1193,12 @@ function removePane(paneId) {
 }
 
 function focusPane(paneId) {
+  const changed = activePaneId !== paneId;
   activePaneId = paneId;
   document.querySelectorAll('.pane').forEach(p => p.classList.remove('focused'));
   const el = document.getElementById('pane-' + paneId);
   if (el) el.classList.add('focused');
+  if (changed) renderSidebar();
 }
 
 function addPane() {
@@ -1270,8 +1295,10 @@ function focusTab(tabId) {
   // Find pane
   for (const p of panes) {
     if (p.tabIds.includes(tabId)) {
+      const tabChanged = p.activeTabId !== tabId;
       p.activeTabId = tabId;
       focusPane(p.id);
+      if (tabChanged) renderSidebar();
       renderPaneTabs(p.id);
       showActiveTabOutput(p.id);
       updateNotepadContent(p.id);
@@ -1580,6 +1607,15 @@ function toggleQueue(paneId) {
   if (inp) inp.focus();
 }
 
+function switchQueueTab(paneId, tab) {
+  const paneEl = document.getElementById('pane-' + paneId);
+  if (!paneEl) return;
+  const panel = paneEl.querySelector('.queue-panel');
+  if (!panel) return;
+  panel._activeTab = tab;
+  renderQueuePanel(paneId);
+}
+
 function renderQueuePanel(paneId) {
   const pane = panes.find(p => p.id === paneId);
   if (!pane || !pane.activeTabId) return;
@@ -1592,49 +1628,62 @@ function renderQueuePanel(paneId) {
   const prevList = panel.querySelector('.queue-list');
   const savedMaxH = panel._userResized && prevList ? prevList.style.maxHeight : null;
   const qs = getQueueState(pane.activeTabId);
-  const undone = qs.items.filter(i => !i.done).length;
-  const total = qs.items.length;
-  const playIcon = qs.playing ? '\\u23f8' : '\\u25b6';
-  let html = '<div class="queue-header">'
-    + '<button class="queue-play-btn' + (qs.playing ? ' playing' : '') + '" onclick="toggleQueuePlay(' + paneId + ')" title="' + (qs.playing ? 'Pause' : 'Play') + '">' + playIcon + '</button>'
-    + '<span>Queue' + (total ? ' (' + undone + '/' + total + ')' : '') + '</span>'
-    + '<button class="queue-close" onclick="toggleQueue(' + paneId + ')">&times;</button>'
-    + '</div><div class="queue-list">';
+  const activeTab = panel._activeTab || 'queue';
   const active = [], past = [];
   for (let i = 0; i < qs.items.length; i++) {
     if (qs.items[i].done) past.push(i); else active.push(i);
   }
-  if (!active.length && !past.length) {
-    html += '<div style="padding:16px 12px;color:var(--text3);font-size:12px;text-align:center;">No tasks yet</div>';
-  }
-  for (const i of active) {
-    const item = qs.items[i];
-    const cls = i === qs.currentIdx ? ' current' : '';
-    html += '<div class="queue-item' + cls + '" data-qi="' + i + '">'
-      + '<span class="qi-grip" data-qi-grip="' + i + '">&#9776;</span>'
-      + '<span class="queue-item-text" onclick="editQueueItem(' + pane.activeTabId + ',' + i + ',this)">' + esc(item.text) + '</span>'
-      + '<button class="queue-item-remove" onclick="removeQueueItem(' + pane.activeTabId + ',' + i + ')">&times;</button>'
+  const playIcon = qs.playing ? '\\u23f8' : '\\u25b6';
+  let html = '<div class="queue-header">'
+    + '<button class="queue-play-btn' + (qs.playing ? ' playing' : '') + '" onclick="toggleQueuePlay(' + paneId + ')" title="' + (qs.playing ? 'Pause' : 'Play') + '">' + playIcon + '</button>'
+    + '<span>Queue' + (active.length ? ' (' + active.length + ')' : '') + '</span>'
+    + '<button class="queue-close" onclick="toggleQueue(' + paneId + ')">&times;</button>'
+    + '</div>'
+    + '<div class="queue-tabs">'
+    + '<button class="queue-tab' + (activeTab === 'queue' ? ' active' : '') + '" onclick="switchQueueTab(' + paneId + ',\\'queue\\')">Queue</button>'
+    + '<button class="queue-tab' + (activeTab === 'completed' ? ' active' : '') + '" onclick="switchQueueTab(' + paneId + ',\\'completed\\')">Completed' + (past.length ? ' (' + past.length + ')' : '') + '</button>'
+    + '</div><div class="queue-list">';
+  if (activeTab === 'queue') {
+    if (!active.length) {
+      html += '<div style="padding:16px 12px;color:var(--text3);font-size:12px;text-align:center;">No tasks yet</div>';
+    }
+    for (const i of active) {
+      const item = qs.items[i];
+      const cls = i === qs.currentIdx ? ' current' : '';
+      html += '<div class="queue-item' + cls + '" data-qi="' + i + '">'
+        + '<span class="qi-grip" data-qi-grip="' + i + '">&#9776;</span>'
+        + '<span class="queue-item-text" onclick="editQueueItem(' + pane.activeTabId + ',' + i + ',this)">' + esc(item.text) + '</span>'
+        + '<button class="queue-item-remove" onclick="removeQueueItem(' + pane.activeTabId + ',' + i + ')">&times;</button>'
+        + '</div>';
+    }
+    html += '</div><div class="queue-add">'
+      + '<textarea rows="1" placeholder="Add a task\\u2026" onkeydown="if(event.key===\\'Enter\\'&&!event.shiftKey){event.preventDefault();addQueueItem(' + paneId + ');}" oninput="this.style.height=\\'auto\\';this.style.height=Math.min(this.scrollHeight,80)+\\'px\\'"></textarea>'
+      + '<button onclick="addQueueItem(' + paneId + ')">+</button>'
       + '</div>';
-  }
-  if (past.length) {
-    html += '<div class="queue-section">Completed (' + past.length + ')</div>';
+  } else {
+    if (!past.length) {
+      html += '<div style="padding:16px 12px;color:var(--text3);font-size:12px;text-align:center;">No completed tasks</div>';
+    }
     for (const i of past) {
       html += '<div class="queue-item done" data-qi="' + i + '">'
         + '<span class="queue-item-text" style="cursor:default">' + esc(qs.items[i].text) + '</span>'
         + '<button class="queue-item-remove" onclick="removeQueueItem(' + pane.activeTabId + ',' + i + ')">&times;</button>'
         + '</div>';
     }
+    if (past.length) {
+      html += '<div style="padding:8px 10px;border-top:1px solid var(--border);">'
+        + '<button onclick="clearCompletedQueue(' + paneId + ')" style="background:none;border:1px solid var(--border2);color:var(--text3);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;width:100%;">Clear completed</button>'
+        + '</div>';
+    }
+    html += '</div>';
   }
-  html += '</div><div class="queue-add">'
-    + '<textarea rows="1" placeholder="Add a task\\u2026" onkeydown="if(event.key===\\'Enter\\'&&!event.shiftKey){event.preventDefault();addQueueItem(' + paneId + ');}" oninput="this.style.height=\\'auto\\';this.style.height=Math.min(this.scrollHeight,80)+\\'px\\'"></textarea>'
-    + '<button onclick="addQueueItem(' + paneId + ')">+</button>'
-    + '</div><div class="queue-resize"></div>';
+  html += '<div class="queue-resize"></div>';
   panel.innerHTML = html;
   if (savedMaxH) {
     const newList = panel.querySelector('.queue-list');
     if (newList) newList.style.maxHeight = savedMaxH;
   }
-  setupQueueDrag(paneId, panel);
+  if (activeTab === 'queue') setupQueueDrag(paneId, panel);
   setupQueueResize(paneId, panel);
   autoFitQueue(panel);
 }
@@ -1776,6 +1825,26 @@ function removeQueueItem(tabId, idx) {
   for (const p of panes) {
     if (p.activeTabId === tabId) { renderQueuePanel(p.id); renderPaneTabs(p.id); break; }
   }
+}
+
+function clearCompletedQueue(paneId) {
+  const pane = panes.find(p => p.id === paneId);
+  if (!pane || !pane.activeTabId) return;
+  const qs = _queueStates[pane.activeTabId];
+  if (!qs) return;
+  // Adjust currentIdx for removed items
+  let removed = 0;
+  qs.items = qs.items.filter((item, i) => {
+    if (item.done) {
+      if (qs.currentIdx !== null && i < qs.currentIdx) removed++;
+      return false;
+    }
+    return true;
+  });
+  if (qs.currentIdx !== null) qs.currentIdx -= removed;
+  saveQueue(pane.activeTabId);
+  renderQueuePanel(paneId);
+  renderPaneTabs(paneId);
 }
 
 function editQueueItem(tabId, idx, span) {
@@ -2215,6 +2284,9 @@ function renderSidebar() {
     if (ib < 0) return 1;
     return ia - ib;
   });
+  // Determine the active window for highlighting
+  const activePn = panes.find(p => p.id === activePaneId);
+  const activeTab = activePn && activePn.activeTabId ? allTabs[activePn.activeTabId] : null;
   let html = '';
   for (const s of sessions) {
     html += '<div class="sb-session" draggable="true" data-session="' + esc(s.name) + '">';
@@ -2239,7 +2311,8 @@ function renderSidebar() {
       }
       const statusClass = w.is_cc ? (w.cc_status || 'idle') : '';
       const wid = esc(s.name) + ':' + w.index;
-      html += '<div class="sb-win" draggable="true" data-session="' + esc(s.name) + '" data-widx="' + w.index + '">'
+      const isActive = activeTab && activeTab.session === s.name && activeTab.windowIndex === w.index;
+      html += '<div class="sb-win' + (isActive ? ' active' : '') + '" draggable="true" data-session="' + esc(s.name) + '" data-widx="' + w.index + '">'
         + '<div class="sb-win-dot ' + dotClass + '" data-wid="' + wid + '" onclick="event.stopPropagation();openTab(\\'' + esc(s.name).replace(/'/g, "\\\\'") + '\\',' + w.index + ',\\'' + esc(w.name).replace(/'/g, "\\\\'") + '\\')"></div>'
         + '<div class="sb-win-info" onclick="openTab(\\'' + esc(s.name).replace(/'/g, "\\\\'") + '\\',' + w.index + ',\\'' + esc(w.name).replace(/'/g, "\\\\'") + '\\')">'
         + '<div class="sb-win-name">' + esc(w.name) + '</div>'
@@ -2490,6 +2563,7 @@ function autoResize() {
   M.style.overflowY = M.scrollHeight > max ? 'auto' : 'hidden';
 }
 M.addEventListener('input', autoResize);
+M.addEventListener('paste', () => setTimeout(autoResize, 0));
 M.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (M.value.trim()) sendGlobal(); else keyActive('Enter'); }
   if (!M.value && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); keyActive(e.key === 'ArrowUp' ? 'Up' : 'Down'); }

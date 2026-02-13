@@ -51,6 +51,13 @@
 - **2026-02-12**: Desktop keyboard forwarding — when textarea is empty, Arrow Up/Down → tmux Up/Down, Enter → tmux Enter, Escape → tmux Escape, Tab → tmux Tab. Enables plan mode / interactive prompt navigation from desktop keyboard.
 - **2026-02-12**: Large text input fix — textarea max-height 80px/120px → 40vh with `overflow-y:auto` scrolling. Backend `paste-buffer` uses `-p` (bracketed paste) so multiline text isn't split into separate inputs by CC's TUI.
 
+## Recently Completed (cont. 6)
+- **2026-02-13**: Queue panel tabs — completed items moved to separate "Completed" tab within queue (with count badge, "Clear completed" button), keeps main queue view clean
+- **2026-02-13**: Raw view ghost filtering — `stripSuggestion()` strips suggestion text from last `❯` line in raw mode when CC is idle
+- **2026-02-13**: Paste/send reliability — 50ms sleep between `paste-buffer -p` and `send-keys Enter` (race fix); `set-buffer` → `load-buffer -` (stdin, no ARG_MAX limit); `paste` event handlers for textarea auto-resize
+- **2026-02-13**: Sidebar active window highlight — active tab's window gets subtle warm tint (`rgba(217,119,87,0.08)`); updates on pane focus and tab switch
+- **2026-02-13**: Working indicator after hard refresh — "Working..." shows in Clean view when `!isIdle(clean)` (detects working CC from terminal output), not just when `awaitingResponse` flag is set
+
 ## Active Work
 None
 
