@@ -79,6 +79,11 @@
   - `moveTabToPane()` updates queue panel
   - `cleanupStaleStorage()` on init prunes orphaned notepad/memo/queue/sidebar-order keys
 
+## Recently Completed (cont. 9)
+- **2026-02-13**: Sidebar snippet moved to right column — two-column layout with window info on left, snippet + context % on right. Default sidebar width 260→300px.
+- **2026-02-13**: Sidebar text scales with text size — `--sb-name`/`--sb-detail`/`--sb-tiny` CSS variables scale across all 4 tiers (A-- through A+). All sidebar elements respond to text size toggle.
+- **2026-02-13**: Fixed false positive status dots — removed `activity_age < 5` fallback from `detect_cc_status()`. CC's TUI refreshes periodically keeping activity_age low (~5-7s) even on idle sessions, causing false "working" orange dots. Text signals (`esc to interrupt`, `·` thinking) are sufficient.
+
 ## Active Work
 None
 

@@ -158,12 +158,13 @@ def detect_cc_status(text: str, activity_age: float = None) -> dict:
     has_thinking = bool(re.search(r'^\u00b7', tail, re.MULTILINE))
 
     # --- Determine status ---
+    # Only rely on text signals (status bar + thinking indicator).
+    # activity_age is NOT used — CC's TUI refreshes periodically (cursor blink,
+    # status bar updates) which keeps activity_age low even when idle.
     if has_working:
         status = 'working'
     elif has_thinking:
         status = 'thinking'
-    elif activity_age is not None and activity_age < 5:
-        status = 'working'
     else:
         status = 'idle'
 
@@ -301,10 +302,11 @@ HTML = """\
   --green: #3fb950; --orange: #d29922;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
-  --sidebar-w: 260px;
+  --sidebar-w: 300px;
   --text-size: 15px; --code-size: 12.5px; --mono-size: 12.5px;
   --turn-pad-v: 16px; --turn-pad-h: 18px; --turn-gap: 12px;
   --turn-radius: 18px; --line-h: 1.7;
+  --sb-name: 12px; --sb-detail: 10px; --sb-tiny: 9px;
 }
 * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
 html, body { height:100%; background:var(--bg); color:var(--text);
@@ -342,9 +344,9 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .sb-session.sb-drag-over { border-top:2px solid var(--accent); }
 .sb-session.dragging { opacity:0.4; }
 .sb-session-header { display:flex; align-items:center; gap:6px; padding:8px 8px 4px;
-  color:var(--text3); font-size:11px; font-weight:700; text-transform:uppercase;
+  color:var(--text3); font-size:var(--sb-detail); font-weight:700; text-transform:uppercase;
   letter-spacing:0.5px; cursor:grab; }
-.sb-session-header .sb-badge { font-size:9px; padding:1px 5px; border-radius:6px;
+.sb-session-header .sb-badge { font-size:var(--sb-tiny); padding:1px 5px; border-radius:6px;
   background:var(--accent); color:#fff; font-weight:500; text-transform:none;
   letter-spacing:0; }
 .sb-win { display:flex; align-items:center; gap:8px; padding:6px 8px;
@@ -360,28 +362,30 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .sb-win-dot.thinking { background:var(--orange); animation:pulse 1s ease-in-out infinite; }
 .sb-win-dot.none { background:var(--text3); opacity:0.3; }
 .sb-win-info { flex:1; min-width:0; }
-.sb-win-name { font-size:12px; font-weight:500; color:var(--text);
+.sb-win-name { font-size:var(--sb-name); font-weight:500; color:var(--text);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.sb-win-cwd { font-size:10px; color:var(--text3);
+.sb-win-cwd { font-size:var(--sb-detail); color:var(--text3);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.sb-win-status { font-size:10px; font-weight:500; color:var(--text3);
-  white-space:nowrap; flex-shrink:0; text-align:right; min-width:50px; }
+.sb-win-right { flex-shrink:0; text-align:right; min-width:0; max-width:45%;
+  display:flex; flex-direction:column; align-items:flex-end; gap:1px; }
+.sb-win-status { font-size:var(--sb-detail); font-weight:500; color:var(--text3);
+  white-space:nowrap; }
 .sb-win-status.working, .sb-win-status.thinking { color:var(--orange); }
 .sb-win-status.idle { color:var(--green); }
-.sb-ctx { display:inline-block; font-size:9px; color:var(--text3); margin-left:4px; }
+.sb-ctx { display:inline-block; font-size:var(--sb-tiny); color:var(--text3); margin-left:4px; }
 .sb-ctx.low { color:var(--orange); font-weight:700; }
 .sb-ctx.critical { color:var(--red); font-weight:700; }
-.sb-perm { font-size:9px; color:var(--text3); margin-top:1px; }
+.sb-perm { font-size:var(--sb-tiny); color:var(--text3); margin-top:1px; }
 .sb-perm.danger { color:var(--red); font-weight:600; }
-.sb-snippet { font-size:10px; color:var(--text3); margin-top:2px;
+.sb-snippet { font-size:var(--sb-detail); color:var(--text3);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-  max-width:180px; font-style:italic; }
-.sb-memo { font-size:10px; color:var(--accent); margin-top:2px;
+  max-width:100%; font-style:italic; }
+.sb-memo { font-size:var(--sb-detail); color:var(--accent); margin-top:2px;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   max-width:180px; cursor:text; min-height:14px; }
 .sb-memo:empty::before { content:'+ note'; color:var(--text3); opacity:0.5;
   font-style:italic; }
-.sb-memo-edit { font-size:10px; color:var(--text); background:var(--surface);
+.sb-memo-edit { font-size:var(--sb-detail); color:var(--text); background:var(--surface);
   border:1px solid var(--accent); border-radius:4px; padding:2px 4px;
   width:100%; margin-top:2px; outline:none; font-family:inherit; }
 .sb-win-detail-btn { background:none; border:none; color:var(--text3);
@@ -2315,10 +2319,10 @@ function toggleRaw() {
 
 // === Text size ===
 const TEXT_SIZES = [
-  { label: 'A--', text: '11px', code: '10px', mono: '10px', padV: '6px', padH: '8px', gap: '3px', radius: '10px', lineH: '1.4' },
-  { label: 'A-',  text: '13px', code: '11px', mono: '11px', padV: '8px', padH: '12px', gap: '6px', radius: '14px', lineH: '1.55' },
-  { label: 'A',   text: '15px', code: '12.5px', mono: '12.5px', padV: '16px', padH: '18px', gap: '12px', radius: '18px', lineH: '1.7' },
-  { label: 'A+',  text: '17px', code: '14px', mono: '14px', padV: '18px', padH: '20px', gap: '14px', radius: '20px', lineH: '1.8' },
+  { label: 'A--', text: '11px', code: '10px', mono: '10px', padV: '6px', padH: '8px', gap: '3px', radius: '10px', lineH: '1.4', sbName: '10px', sbDetail: '8px', sbTiny: '7px' },
+  { label: 'A-',  text: '13px', code: '11px', mono: '11px', padV: '8px', padH: '12px', gap: '6px', radius: '14px', lineH: '1.55', sbName: '11px', sbDetail: '9px', sbTiny: '8px' },
+  { label: 'A',   text: '15px', code: '12.5px', mono: '12.5px', padV: '16px', padH: '18px', gap: '12px', radius: '18px', lineH: '1.7', sbName: '12px', sbDetail: '10px', sbTiny: '9px' },
+  { label: 'A+',  text: '17px', code: '14px', mono: '14px', padV: '18px', padH: '20px', gap: '14px', radius: '20px', lineH: '1.8', sbName: '13px', sbDetail: '11px', sbTiny: '10px' },
 ];
 let _textSizeIdx = 2;
 function applyTextSize(idx) {
@@ -2329,6 +2333,8 @@ function applyTextSize(idx) {
   r.setProperty('--mono-size', s.mono); r.setProperty('--turn-pad-v', s.padV);
   r.setProperty('--turn-pad-h', s.padH); r.setProperty('--turn-gap', s.gap);
   r.setProperty('--turn-radius', s.radius); r.setProperty('--line-h', s.lineH);
+  r.setProperty('--sb-name', s.sbName); r.setProperty('--sb-detail', s.sbDetail);
+  r.setProperty('--sb-tiny', s.sbTiny);
   document.getElementById('size-btn').textContent = s.label;
   try { localStorage.setItem('textSize', idx); } catch(e) {}
 }
@@ -2443,10 +2449,12 @@ function renderSidebar() {
         + '<div class="sb-win-name">' + esc(w.name) + '</div>'
         + '<div class="sb-win-cwd">' + esc(abbreviateCwd(w.cwd)) + '</div>'
         + (w.is_cc ? '<div class="sb-perm' + (w.cc_perm_mode && /dangerously|skip/i.test(w.cc_perm_mode) ? ' danger' : '') + '" data-wid="' + wid + '">' + (w.cc_perm_mode ? esc(w.cc_perm_mode) : '') + '</div>' : '')
-        + (snippet ? '<div class="sb-snippet" title="' + esc(snippet) + '">' + esc(snippet) + '</div>' : '')
         + '<div class="sb-memo" data-wid="' + wid + '" onclick="event.stopPropagation();startMemoEdit(this,\\'' + sEsc + '\\',' + w.index + ')">' + esc(memo) + '</div>'
         + '</div>'
+        + '<div class="sb-win-right">'
         + '<div class="sb-win-status ' + statusClass + '" data-wid="' + wid + '">' + status + '</div>'
+        + (snippet ? '<div class="sb-snippet" title="' + esc(snippet) + '">' + esc(snippet) + '</div>' : '')
+        + '</div>'
         + '<button class="sb-win-detail-btn" onclick="event.stopPropagation();openWD(\\'' + sEsc + '\\',' + w.index + ')" title="Details">&#8942;</button>'
         + '</div>';
     }
