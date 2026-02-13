@@ -50,6 +50,8 @@ def _tmux_target(session=None, window=None):
 
 def send_keys(text: str, session=None, window=None):
     target = _tmux_target(session, window)
+    # Clear any existing input on the line before sending (Ctrl-U + Ctrl-K)
+    subprocess.run(["tmux", "send-keys", "-t", target, "C-u"])
     subprocess.run(["tmux", "send-keys", "-t", target, "-l", text])
     subprocess.run(["tmux", "send-keys", "-t", target, "Enter"])
 
@@ -549,8 +551,12 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   background:rgba(0,0,0,0.6); align-items:center; justify-content:center; }
 #wd-overlay.open { display:flex; }
 #wd-modal { background:var(--bg2); border:1px solid var(--border2);
-  border-radius:16px; padding:20px; width:min(340px, 85vw); }
+  border-radius:16px; padding:20px; width:min(340px, 85vw); position:relative; }
 #wd-modal h3 { font-size:14px; font-weight:600; color:var(--text); margin-bottom:14px; }
+.wd-close-x { position:absolute; top:12px; right:12px; width:28px; height:28px;
+  border:none; border-radius:50%; background:rgba(229,83,75,0.15); color:var(--red);
+  font-size:16px; line-height:28px; text-align:center; cursor:pointer; padding:0; }
+.wd-close-x:active { background:rgba(229,83,75,0.3); }
 .wd-row { display:flex; gap:10px; padding:8px 0; border-bottom:1px solid var(--border); }
 .wd-row:last-child { border-bottom:none; }
 .wd-label { color:var(--text3); font-size:11px; font-weight:600;
@@ -568,7 +574,6 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .wd-btns { display:flex; gap:8px; margin-top:12px; }
 .wd-btns button { flex:1; padding:9px; border:none; border-radius:8px;
   font-size:13px; font-weight:500; font-family:inherit; cursor:pointer; }
-.wd-btn-close-win { background:rgba(229,83,75,0.15); color:var(--red); }
 .wd-btn-dismiss { background:var(--surface); color:var(--text2); }
 </style>
 </head>
@@ -639,6 +644,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 
 <div id="wd-overlay" onclick="if(event.target===this)closeWD()">
   <div id="wd-modal">
+    <button class="wd-close-x" onclick="closeWDWindow()" title="Close window">&times;</button>
     <h3 id="wd-title">Window Details</h3>
     <div id="wd-content"></div>
     <div id="wd-rename-row">
@@ -648,7 +654,6 @@ html, body { height:100%; background:var(--bg); color:var(--text);
     </div>
     <div class="wd-btns">
       <button class="wd-btn-dismiss" onclick="closeWD()">Close</button>
-      <button class="wd-btn-close-win" onclick="closeWDWindow()">Close Window</button>
     </div>
   </div>
 </div>
@@ -675,8 +680,10 @@ const SEND_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 function esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 function md(s) {
   if (typeof marked !== 'undefined') {
-    marked.setOptions({ breaks: false });
-    return marked.parse(s);
+    try {
+      marked.setOptions({ breaks: false });
+      return marked.parse(s);
+    } catch(e) { /* fall through to plain text */ }
   }
   return '<p>' + esc(s) + '</p>';
 }
