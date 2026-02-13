@@ -96,13 +96,13 @@ def get_pane_preview(session: str, window: int, lines: int = 5) -> str:
     return text.strip()
 
 
-def detect_cc_status(text: str, activity_age: float = None) -> tuple:
+def detect_cc_status(text: str, activity_age: float = None) -> dict:
     """Detect if text is Claude Code output and its status.
-    Returns (is_cc, status, context_pct) where context_pct is int or None.
+    Returns dict with is_cc, status, context_pct, perm_mode.
     """
     is_cc = '\u276f' in text and '\u23fa' in text
     if not is_cc:
-        return False, None, None
+        return {"is_cc": False, "status": None, "context_pct": None, "perm_mode": None}
 
     lines = text.split('\n')
 
@@ -113,6 +113,7 @@ def detect_cc_status(text: str, activity_age: float = None) -> tuple:
     #    "⏵⏵ bypass permissions on (shift+tab to cycle) · 3 files · esc to interrupt"
     has_working = False
     context_pct = None
+    perm_mode = None
     for line in lines[-3:]:
         if '\u23f5' in line:
             if 'esc to interrupt' in line:
@@ -121,6 +122,15 @@ def detect_cc_status(text: str, activity_age: float = None) -> tuple:
             m = re.search(r'Context left[^:]*:\s*(\d+)%', line)
             if m:
                 context_pct = int(m.group(1))
+            # Permission mode: text between ⏵⏵ and (shift+tab or first ·
+            pm = re.search(r'\u23f5\u23f5\s+(.+?)(?:\s*\(shift\+tab|\s*\u00b7)', line)
+            if pm:
+                perm_mode = pm.group(1).strip()
+            elif '\u23f5\u23f5' in line:
+                # Fallback: grab everything after ⏵⏵ up to first ·
+                pm2 = re.search(r'\u23f5\u23f5\s+(.+?)(?:\s*\u00b7|$)', line)
+                if pm2:
+                    perm_mode = pm2.group(1).strip()
             break
 
     # 2. Thinking: · at START of any line in last 20 lines
@@ -137,7 +147,7 @@ def detect_cc_status(text: str, activity_age: float = None) -> tuple:
     else:
         status = 'idle'
 
-    return True, status, context_pct
+    return {"is_cc": True, "status": status, "context_pct": context_pct, "perm_mode": perm_mode}
 
 
 def get_dashboard() -> dict:
@@ -170,7 +180,7 @@ def get_dashboard() -> dict:
             activity_age = None
         # Get preview for CC detection (20 lines for better signal coverage)
         preview = get_pane_preview(sname, int(widx), lines=20)
-        is_cc, cc_status, ctx_pct = detect_cc_status(preview, activity_age=activity_age)
+        cc = detect_cc_status(preview, activity_age=activity_age)
         # Trim preview to last 5 lines for response
         preview_short = '\n'.join(preview.split('\n')[-5:])
         sessions[sname]["windows"].append({
@@ -180,9 +190,10 @@ def get_dashboard() -> dict:
             "cwd": cwd,
             "command": cmd,
             "pid": pid,
-            "is_cc": is_cc,
-            "cc_status": cc_status,
-            "cc_context_pct": ctx_pct,
+            "is_cc": cc["is_cc"],
+            "cc_status": cc["status"],
+            "cc_context_pct": cc["context_pct"],
+            "cc_perm_mode": cc["perm_mode"],
             "preview": preview_short,
         })
     return {"sessions": list(sessions.values())}
@@ -340,6 +351,8 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .sb-ctx { display:inline-block; font-size:9px; color:var(--text3); margin-left:4px; }
 .sb-ctx.low { color:var(--orange); font-weight:700; }
 .sb-ctx.critical { color:var(--red); font-weight:700; }
+.sb-perm { font-size:9px; color:var(--text3); margin-top:1px; }
+.sb-perm.danger { color:var(--red); font-weight:600; }
 .sb-win-detail-btn { background:none; border:none; color:var(--text3);
   font-size:16px; cursor:pointer; padding:2px 4px; border-radius:4px;
   flex-shrink:0; opacity:0; transition:opacity .15s; line-height:1; }
@@ -474,7 +487,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .pane-queue-btn.active { color:var(--accent); }
 .pane-queue-btn.playing { color:#4ecf6a; }
 .queue-panel { position:absolute; top:30px; right:0; z-index:10;
-  width:min(380px, 95%); max-height:70%; background:var(--bg2);
+  width:min(480px, 95%); max-height:70%; background:var(--bg2);
   border:1px solid var(--border2); border-radius:0 0 0 12px;
   display:flex; flex-direction:column; overflow:hidden;
   transform:translateY(-10px); opacity:0; pointer-events:none;
@@ -490,7 +503,11 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .queue-close { background:none; border:none; color:var(--text3); cursor:pointer;
   font-size:14px; padding:0 4px; margin-left:auto; }
 .queue-close:hover { color:var(--text); }
-.queue-list { flex:1; overflow-y:auto; padding:4px 0; min-height:40px; max-height:260px; }
+.queue-list { flex:1; overflow-y:auto; padding:4px 0; min-height:40px; }
+.queue-resize { height:6px; cursor:ns-resize; flex-shrink:0;
+  position:relative; background:transparent; }
+.queue-resize::after { content:''; position:absolute; left:50%; top:50%;
+  transform:translate(-50%,-50%); width:32px; height:3px; border-radius:2px; background:var(--border2); }
 .queue-item { display:flex; align-items:center; gap:6px; padding:6px 8px 6px 4px;
   font-size:13px; color:var(--text); border-left:3px solid transparent; position:relative; }
 .queue-item.current { border-left-color:var(--accent); background:rgba(217,119,87,0.08); }
@@ -505,17 +522,19 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .queue-item-text:hover { background:rgba(255,255,255,0.04); }
 .qi-edit { flex:1; background:var(--surface); color:var(--text); border:1px solid var(--accent);
   border-radius:6px; padding:4px 8px; font-size:13px; font-family:inherit; outline:none;
-  line-height:1.4; min-width:0; }
+  line-height:1.4; min-width:0; resize:none; min-height:24px; max-height:80px; overflow-y:auto;
+  field-sizing:content; }
 .queue-item-remove { background:none; border:none; color:var(--text3); cursor:pointer;
   font-size:14px; padding:0 4px; flex-shrink:0; }
 .queue-item-remove:hover { color:var(--red); }
 .queue-add { display:flex; gap:6px; padding:8px 10px;
   border-top:1px solid var(--border); flex-shrink:0; }
-.queue-add input { flex:1; background:var(--surface); color:var(--text);
+.queue-add textarea { flex:1; background:var(--surface); color:var(--text);
   border:1px solid var(--border2); border-radius:8px; padding:6px 10px;
-  font-size:13px; font-family:inherit; outline:none; }
-.queue-add input::placeholder { color:var(--text3); }
-.queue-add input:focus { border-color:rgba(217,119,87,0.5); }
+  font-size:13px; font-family:inherit; outline:none; resize:none;
+  line-height:1.4; min-height:30px; max-height:80px; overflow-y:auto; }
+.queue-add textarea::placeholder { color:var(--text3); }
+.queue-add textarea:focus { border-color:rgba(217,119,87,0.5); }
 .queue-add button { background:var(--accent); color:#fff; border:none;
   border-radius:8px; padding:6px 10px; font-size:13px; font-weight:600;
   cursor:pointer; flex-shrink:0; }
@@ -841,36 +860,49 @@ function statusLabel(cc_status) {
 }
 function detectCCStatus(text) {
   // Quick client-side CC status detection from output text
-  // Returns {status, contextPct} or null
+  // Returns {status, contextPct, permMode} or null
   if (!isClaudeCode(text)) return null;
   const lines = text.split('\\n');
-  let status = 'idle', contextPct = null;
-  // Check status bar (last line with ⏵) for "esc to interrupt" and context %
+  let status = 'idle', contextPct = null, permMode = null;
+  // Check status bar (last line with ⏵) for "esc to interrupt", context %, and perm mode
   for (let i = lines.length - 1; i >= Math.max(0, lines.length - 5); i--) {
     if (/^\\s*\\u23f5/.test(lines[i])) {
       if (/esc to interrupt/.test(lines[i])) status = 'working';
       const m = lines[i].match(/Context left[^:]*:\\s*(\\d+)%/);
       if (m) contextPct = parseInt(m[1]);
+      // Extract permission mode: text between ⏵⏵ and (shift+tab or first ·
+      const pm = lines[i].match(/\\u23f5\\u23f5\\s+(.+?)(?:\\s*\\(shift\\+tab|\\s*\\u00b7)/);
+      if (pm) permMode = pm[1].trim();
+      else {
+        const pm2 = lines[i].match(/\\u23f5\\u23f5\\s+(.+?)(?:\\s*\\u00b7|$)/);
+        if (pm2) permMode = pm2[1].trim();
+      }
       break;
     }
   }
   // Check for thinking indicator
   if (status === 'idle' && /^\\u00b7/m.test(lines.slice(-15).join('\\n'))) status = 'thinking';
-  return { status, contextPct };
+  return { status, contextPct, permMode };
 }
-function updateSidebarStatus(session, windowIndex, ccStatus, contextPct) {
+function updateSidebarStatus(session, windowIndex, ccStatus, contextPct, permMode) {
   const wid = session + ':' + windowIndex;
   const dot = document.querySelector('.sb-win-dot[data-wid="' + wid + '"]');
   const lbl = document.querySelector('.sb-win-status[data-wid="' + wid + '"]');
   if (dot) { dot.className = 'sb-win-dot ' + (ccStatus || 'idle'); }
   if (lbl) {
     lbl.className = 'sb-win-status ' + (ccStatus || 'idle');
-    let html = statusLabel(ccStatus);
+    let html = '';
     if (contextPct != null) {
       const cls = contextPct <= 10 ? 'critical' : contextPct <= 25 ? 'low' : '';
-      html += '<span class="sb-ctx ' + cls + '">' + contextPct + '%</span>';
+      html = '<span class="sb-ctx ' + cls + '">' + contextPct + '%</span>';
     }
     lbl.innerHTML = html;
+  }
+  // Update perm mode label
+  const permEl = document.querySelector('.sb-perm[data-wid="' + wid + '"]');
+  if (permEl && permMode) {
+    permEl.textContent = permMode;
+    permEl.className = 'sb-perm' + (/dangerously|skip/i.test(permMode) ? ' danger' : '');
   }
 }
 
@@ -901,7 +933,21 @@ function isIdle(text) {
   return true;
 }
 function parseCCTurns(text) {
-  const lines = text.split('\\n');
+  // Trim to last CC session — find last startup banner ("Claude Code v")
+  // and only parse from there, so old session content / shell lines are excluded
+  let lines = text.split('\\n');
+  let bannerIdx = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/Claude Code v\\d/.test(lines[i])) { bannerIdx = i; break; }
+  }
+  if (bannerIdx >= 0) {
+    // Find the first ❯ after the banner (skip banner block)
+    let startIdx = bannerIdx;
+    for (let i = bannerIdx; i < lines.length; i++) {
+      if (/^\\u276f/.test(lines[i].replace(/\\u00a0/g, ' '))) { startIdx = i; break; }
+    }
+    lines = lines.slice(startIdx);
+  }
   const turns = []; let cur = null, inTool = false, sawStatus = false;
   for (const line of lines) {
     const raw = line.replace(/\\u00a0/g, ' ');
@@ -1515,7 +1561,7 @@ function toggleQueue(paneId) {
   renderQueuePanel(paneId);
   panel.classList.add('open');
   paneEl.querySelector('.pane-queue-btn')?.classList.add('active');
-  const inp = panel.querySelector('.queue-add input');
+  const inp = panel.querySelector('.queue-add textarea');
   if (inp) inp.focus();
 }
 
@@ -1527,6 +1573,9 @@ function renderQueuePanel(paneId) {
   const panel = paneEl.querySelector('.queue-panel');
   if (!panel) return;
   if (panel.querySelector('.qi-edit')) return;
+  // Save user-set list height before rebuild
+  const prevList = panel.querySelector('.queue-list');
+  const savedMaxH = panel._userResized && prevList ? prevList.style.maxHeight : null;
   const qs = getQueueState(pane.activeTabId);
   const undone = qs.items.filter(i => !i.done).length;
   const total = qs.items.length;
@@ -1549,11 +1598,53 @@ function renderQueuePanel(paneId) {
     html += '<div style="padding:16px 12px;color:var(--text3);font-size:12px;text-align:center;">No tasks yet</div>';
   }
   html += '</div><div class="queue-add">'
-    + '<input type="text" placeholder="Add a task\\u2026" onkeydown="if(event.key===\\'Enter\\'){event.preventDefault();addQueueItem(' + paneId + ');}">'
+    + '<textarea rows="1" placeholder="Add a task\\u2026" onkeydown="if(event.key===\\'Enter\\'&&!event.shiftKey){event.preventDefault();addQueueItem(' + paneId + ');}" oninput="this.style.height=\\'auto\\';this.style.height=Math.min(this.scrollHeight,80)+\\'px\\'"></textarea>'
     + '<button onclick="addQueueItem(' + paneId + ')">+</button>'
-    + '</div>';
+    + '</div><div class="queue-resize"></div>';
   panel.innerHTML = html;
+  if (savedMaxH) {
+    const newList = panel.querySelector('.queue-list');
+    if (newList) newList.style.maxHeight = savedMaxH;
+  }
   setupQueueDrag(paneId, panel);
+  setupQueueResize(paneId, panel);
+  autoFitQueue(panel);
+}
+
+function autoFitQueue(panel) {
+  if (panel._userResized) return;
+  const list = panel.querySelector('.queue-list');
+  if (!list) return;
+  // Remove any fixed max-height so we can measure natural height
+  list.style.maxHeight = 'none';
+  const natural = list.scrollHeight;
+  // Cap at 60% of viewport
+  const cap = window.innerHeight * 0.6;
+  list.style.maxHeight = Math.min(natural, cap) + 'px';
+}
+
+function setupQueueResize(paneId, panel) {
+  const handle = panel.querySelector('.queue-resize');
+  if (!handle) return;
+  handle.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    const list = panel.querySelector('.queue-list');
+    if (!list) return;
+    const startY = e.clientY;
+    const startH = list.getBoundingClientRect().height;
+    function onMove(ev) {
+      const newH = Math.max(40, startH + (ev.clientY - startY));
+      list.style.maxHeight = newH + 'px';
+    }
+    function onUp() {
+      panel._userResized = true;
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+    }
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+  });
 }
 
 function setupQueueDrag(paneId, panel) {
@@ -1629,16 +1720,17 @@ function addQueueItem(paneId) {
   if (!pane || !pane.activeTabId) return;
   const paneEl = document.getElementById('pane-' + paneId);
   if (!paneEl) return;
-  const inp = paneEl.querySelector('.queue-add input');
+  const inp = paneEl.querySelector('.queue-add textarea');
   if (!inp) return;
   const text = inp.value.trim();
   if (!text) return;
   inp.value = '';
+  inp.style.height = 'auto';
   const qs = getQueueState(pane.activeTabId);
   qs.items.push({ text: text, done: false });
   saveQueue(pane.activeTabId);
   renderQueuePanel(paneId);
-  paneEl.querySelector('.queue-add input')?.focus();
+  paneEl.querySelector('.queue-add textarea')?.focus();
 }
 
 function removeQueueItem(tabId, idx) {
@@ -1661,25 +1753,33 @@ function editQueueItem(tabId, idx, span) {
   const qs = _queueStates[tabId];
   if (!qs || idx < 0 || idx >= qs.items.length) return;
   const item = qs.items[idx];
-  const inp = document.createElement('input');
+  const inp = document.createElement('textarea');
   inp.className = 'qi-edit';
+  inp.enterKeyHint = 'done';
+  inp.rows = 1;
   inp.value = item.text;
   span.replaceWith(inp);
+  inp.style.height = 'auto';
+  inp.style.height = Math.min(inp.scrollHeight, 80) + 'px';
   inp.focus();
   inp.select();
   function save() {
+    if (inp._saved) return;
+    inp._saved = true;
     const text = inp.value.trim();
     if (text && text !== item.text) {
       item.text = text;
       saveQueue(tabId);
     }
+    inp.classList.remove('qi-edit');
     for (const p of panes) {
       if (p.activeTabId === tabId) { renderQueuePanel(p.id); break; }
     }
   }
   inp.addEventListener('blur', save);
+  inp.addEventListener('input', () => { inp.style.height = 'auto'; inp.style.height = Math.min(inp.scrollHeight, 80) + 'px'; });
   inp.addEventListener('keydown', e => {
-    if (e.key === 'Enter') { e.preventDefault(); inp.blur(); }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); inp.blur(); }
     if (e.key === 'Escape') { inp.value = item.text; inp.blur(); }
   });
 }
@@ -1869,7 +1969,7 @@ async function pollTab(tabId) {
     // Update sidebar status on every poll (1s latency vs 3s dashboard)
     const clean = cleanTerminal(d.output);
     const live = detectCCStatus(clean);
-    if (live) updateSidebarStatus(tab.session, tab.windowIndex, live.status, live.contextPct);
+    if (live) updateSidebarStatus(tab.session, tab.windowIndex, live.status, live.contextPct, live.permMode);
     if (d.output !== state.last) {
       state.lastOutputChange = Date.now();
       state.last = d.output; state.rawContent = d.output;
@@ -2084,10 +2184,10 @@ function renderSidebar() {
     });
     for (const w of windows) {
       const dotClass = w.is_cc ? (w.cc_status || 'idle') : 'none';
-      let status = w.is_cc ? statusLabel(w.cc_status) : '';
+      let status = '';
       if (w.cc_context_pct != null) {
         const cls = w.cc_context_pct <= 10 ? 'critical' : w.cc_context_pct <= 25 ? 'low' : '';
-        status += '<span class="sb-ctx ' + cls + '">' + w.cc_context_pct + '%</span>';
+        status = '<span class="sb-ctx ' + cls + '">' + w.cc_context_pct + '%</span>';
       }
       const statusClass = w.is_cc ? (w.cc_status || 'idle') : '';
       const wid = esc(s.name) + ':' + w.index;
@@ -2096,6 +2196,7 @@ function renderSidebar() {
         + '<div class="sb-win-info" onclick="openTab(\\'' + esc(s.name).replace(/'/g, "\\\\'") + '\\',' + w.index + ',\\'' + esc(w.name).replace(/'/g, "\\\\'") + '\\')">'
         + '<div class="sb-win-name">' + esc(w.name) + '</div>'
         + '<div class="sb-win-cwd">' + esc(abbreviateCwd(w.cwd)) + '</div>'
+        + (w.is_cc ? '<div class="sb-perm' + (w.cc_perm_mode && /dangerously|skip/i.test(w.cc_perm_mode) ? ' danger' : '') + '" data-wid="' + wid + '">' + (w.cc_perm_mode ? esc(w.cc_perm_mode) : '') + '</div>' : '')
         + '</div>'
         + '<div class="sb-win-status ' + statusClass + '" data-wid="' + wid + '">' + status + '</div>'
         + '<button class="sb-win-detail-btn" onclick="event.stopPropagation();openWD(\\'' + esc(s.name).replace(/'/g, "\\\\'") + '\\',' + w.index + ')" title="Details">&#8942;</button>'
@@ -2229,6 +2330,10 @@ function openWD(session, windowIndex) {
   html += '<div class="wd-row"><span class="wd-label">Command</span><span class="wd-value">' + esc(win.command) + '</span></div>';
   if (win.is_cc) {
     html += '<div class="wd-row"><span class="wd-label">Status</span><span class="wd-value">' + statusLabel(win.cc_status) + '</span></div>';
+    if (win.cc_perm_mode) {
+      const isDanger = /dangerously|skip/i.test(win.cc_perm_mode);
+      html += '<div class="wd-row"><span class="wd-label">Permissions</span><span class="wd-value' + (isDanger ? '" style="color:var(--red);font-weight:600' : '') + '">' + esc(win.cc_perm_mode) + '</span></div>';
+    }
     const pct = win.cc_context_pct;
     const ctxLabel = pct != null ? pct + '%' : 'Healthy';
     const barColor = pct != null && pct <= 10 ? 'var(--red)' : pct != null && pct <= 25 ? 'var(--orange)' : 'var(--green)';

@@ -36,6 +36,13 @@
 - **2026-02-12**: Context remaining display — color-coded context % in sidebar (green/orange/red) and progress bar in details modal. Already plumbed end-to-end; CC only reports % when context is low.
 - **2026-02-12**: Large text paste fix — `send_keys()` now uses `tmux set-buffer` + `paste-buffer` for text >500 chars or containing newlines, instead of `send-keys -l` which was unreliable for large blocks.
 
+## Recently Completed (cont. 4)
+- **2026-02-12**: Queue edit fix — `save()` was calling `renderQueuePanel()` while `.qi-edit` input still in DOM, guard blocked re-render permanently. Fixed by removing class before re-render + `_saved` double-fire guard. Added `enterKeyHint='done'` for iOS.
+- **2026-02-12**: Queue UX improvements — panel width 380→480px; add-task input and inline edit converted from `<input>` to `<textarea>` with auto-grow (Shift+Enter for newlines, Enter submits/saves); queue list auto-expands to fit content (capped 60vh); bottom resize handle; once user manually resizes, auto-sizing stops (`panel._userResized`).
+- **2026-02-12**: Permission mode in sidebar — `detect_cc_status()` extracts perm mode from `⏵⏵` status bar line. Shown per-window in sidebar and details modal. `--dangerously-skip-permissions` highlighted in red. Client-side `detectCCStatus()` also extracts for 1s live updates. Return type changed from tuple to dict.
+- **2026-02-12**: Sidebar text labels removed — "Working"/"Standby"/"Thinking" labels dropped, dots-only for status. Context % still shown when available.
+- **2026-02-12**: CC session boundary detection — `parseCCTurns()` finds last `Claude Code vX.X.X` banner in terminal output and only parses from the first `❯` after it. Fixes wonky formatting when CC restarts, after `/clear`, or when shell output (banner, "Resume this session", prompt) is mixed in.
+
 ## Active Work
 None
 
