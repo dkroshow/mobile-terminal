@@ -1391,7 +1391,7 @@ function createPane(parentEl) {
   ta.addEventListener('input', paneResize);
   ta.addEventListener('paste', () => setTimeout(paneResize, 0));
   ta.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (ta.value.trim()) sendToPane(id); else keyActive('Enter'); }
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (ta.value.trim()) sendToPane(id); else keyActive('Enter'); }
     if (!ta.value && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); keyActive(e.key === 'ArrowUp' ? 'Up' : 'Down'); }
     if (!ta.value && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); keyActive(e.key === 'ArrowLeft' ? 'Left' : 'Right'); }
     if (!ta.value && e.key === 'Escape') { e.preventDefault(); keyActive('Escape'); }
@@ -2462,11 +2462,16 @@ async function sendToPane(paneId) {
   const outEl = document.getElementById('tab-output-' + pane.activeTabId);
   if (outEl) { renderOutput(state.rawContent || state.last, outEl, state, pane.activeTabId); outEl.scrollTop = outEl.scrollHeight; }
   try {
-    await fetch('/api/send', {
+    const resp = await fetch('/api/send', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ cmd: text, session: tab.session, window: tab.windowIndex })
     });
-  } catch(e) {}
+    if (!resp.ok) throw new Error('send failed');
+  } catch(e) {
+    // Restore text so user doesn't lose input
+    ta.value = text; ta.dispatchEvent(new Event('input'));
+    state.pendingMsg = null; state.awaitingResponse = false;
+  }
 }
 
 async function sendGlobal() {
@@ -2480,11 +2485,16 @@ async function sendGlobal() {
   const outEl = document.getElementById('tab-output-' + active.tabId);
   if (outEl) { renderOutput(active.state.rawContent || active.state.last, outEl, active.state, active.tabId); outEl.scrollTop = outEl.scrollHeight; }
   try {
-    await fetch('/api/send', {
+    const resp = await fetch('/api/send', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ cmd: text, session: active.tab.session, window: active.tab.windowIndex })
     });
-  } catch(e) {}
+    if (!resp.ok) throw new Error('send failed');
+  } catch(e) {
+    // Restore text so user doesn't lose input
+    M.value = text; M.dispatchEvent(new Event('input'));
+    active.state.pendingMsg = null; active.state.awaitingResponse = false;
+  }
 }
 
 async function keyActive(k) {
@@ -2964,7 +2974,7 @@ function autoResize() {
 M.addEventListener('input', autoResize);
 M.addEventListener('paste', () => setTimeout(autoResize, 0));
 M.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (M.value.trim()) sendGlobal(); else keyActive('Enter'); }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (M.value.trim()) sendGlobal(); else keyActive('Enter'); }
   if (!M.value && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); keyActive(e.key === 'ArrowUp' ? 'Up' : 'Down'); }
   if (!M.value && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); keyActive(e.key === 'ArrowLeft' ? 'Left' : 'Right'); }
   if (!M.value && e.key === 'Escape') { e.preventDefault(); keyActive('Escape'); }
