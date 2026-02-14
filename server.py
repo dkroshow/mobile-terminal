@@ -71,19 +71,19 @@ def _tmux_target(session=None, window=None):
 
 def send_keys(text: str, session=None, window=None):
     target = _tmux_target(session, window)
-    # Clear any existing input on the line before sending (Ctrl-U + Ctrl-K)
+    # Clear any existing input on the line before sending (Ctrl-U)
     _run(["tmux", "send-keys", "-t", target, "C-u"])
-    # For large text, use set-buffer + paste-buffer for reliable delivery
-    # -p enables bracketed paste so TUI apps (CC) treat it as a single paste, not line-by-line input
-    if len(text) > 500 or '\n' in text:
-        buf_name = "_mt_paste"
-        _run(["tmux", "load-buffer", "-b", buf_name, "-"], input=text.encode())
-        _run(["tmux", "paste-buffer", "-d", "-p", "-b", buf_name, "-t", target])
-        time.sleep(0.05)  # Let TUI process bracketed paste before sending Enter
-        _run(["tmux", "send-keys", "-t", target, "Enter"])
-    else:
-        _run(["tmux", "send-keys", "-t", target, "-l", text])
-        _run(["tmux", "send-keys", "-t", target, "Enter"])
+    # Always use load-buffer + paste-buffer for reliable delivery.
+    # send-keys -l is unreliable: special chars ($, \, `, ") can be interpreted by tmux,
+    # and there's no race protection between text and Enter.
+    # -p enables bracketed paste so TUI apps (CC) treat it as a single paste.
+    buf_name = "_mt_paste"
+    r = _run(["tmux", "load-buffer", "-b", buf_name, "-"], input=text.encode())
+    if r.returncode != 0:
+        return  # Don't send Enter if buffer load failed
+    _run(["tmux", "paste-buffer", "-d", "-p", "-b", buf_name, "-t", target])
+    time.sleep(0.05)  # Let TUI process bracketed paste before sending Enter
+    _run(["tmux", "send-keys", "-t", target, "Enter"])
 
 
 def send_special(key: str, session=None, window=None):
@@ -216,7 +216,7 @@ def get_dashboard() -> dict:
             "cc_context_pct": cc["context_pct"],
             "cc_perm_mode": cc["perm_mode"],
             "preview": preview_short,
-            "activity_age": round(activity_age) if activity_age is not None else None,
+            "activity_ts": int(wactivity) if activity_age is not None else None,
         })
     return {"sessions": list(sessions.values())}
 
@@ -374,7 +374,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .sb-hidden-header:hover { color:var(--text2); }
 .sb-hidden-chevron { transition:transform .15s; font-size:10px; }
 .sb-hidden-chevron.open { transform:rotate(90deg); }
-.sb-activity { font-size:var(--sb-tiny); color:var(--text3); opacity:0.7; white-space:nowrap; }
+.sb-activity { font-size:var(--sb-detail); color:var(--text3); opacity:0.7; white-space:nowrap; }
 .sb-win { display:flex; align-items:center; gap:8px; padding:6px 4px;
   border-radius:8px; cursor:pointer; transition:all .12s;
   -webkit-user-select:none; user-select:none; }
@@ -1037,11 +1037,26 @@ let _hiddenExpanded = false;
 
 // === Activity age formatting ===
 function formatAge(seconds) {
-  if (seconds == null) return '';
+  if (seconds == null || seconds < 0) return '';
   if (seconds < 60) return 'now';
   if (seconds < 3600) return Math.floor(seconds / 60) + 'm';
   if (seconds < 86400) return Math.floor(seconds / 3600) + 'h';
   return Math.floor(seconds / 86400) + 'd';
+}
+function ageFromTs(ts) {
+  if (ts == null) return '';
+  return formatAge(Math.floor(Date.now() / 1000) - ts);
+}
+// Update all .sb-activity spans in-place without full sidebar re-render
+function updateSidebarAges() {
+  if (!_dashboardData) return;
+  for (const s of _dashboardData.sessions) {
+    for (const w of s.windows) {
+      const wid = s.name + ':' + w.index;
+      const el = document.querySelector('.sb-activity[data-wid="' + wid + '"]');
+      if (el) el.textContent = ageFromTs(w.activity_ts);
+    }
+  }
 }
 
 function detectCCStatus(text) {
@@ -1853,7 +1868,9 @@ function renderQueuePanel(paneId) {
   const panel = paneEl.querySelector('.queue-panel');
   if (!panel) return;
   if (panel.querySelector('.qi-edit')) return;
-  // Save user-set list height before rebuild
+  // Save draft text and user-set list height before rebuild
+  const prevAdd = panel.querySelector('.queue-add textarea');
+  const draftText = prevAdd ? prevAdd.value : '';
   const prevList = panel.querySelector('.queue-list');
   const savedMaxH = panel._userResized && prevList ? prevList.style.maxHeight : null;
   const qs = getQueueState(pane.activeTabId);
@@ -1908,6 +1925,11 @@ function renderQueuePanel(paneId) {
   }
   html += '<div class="queue-resize"></div>';
   panel.innerHTML = html;
+  // Restore draft text in add-task textarea
+  if (draftText) {
+    const newAdd = panel.querySelector('.queue-add textarea');
+    if (newAdd) { newAdd.value = draftText; newAdd.style.height = 'auto'; newAdd.style.height = Math.min(newAdd.scrollHeight, 80) + 'px'; }
+  }
   if (savedMaxH) {
     const newList = panel.querySelector('.queue-list');
     if (newList) newList.style.maxHeight = savedMaxH;
@@ -2569,6 +2591,13 @@ function renderSidebar() {
       }
     }
   }
+  // Skip full DOM rebuild if only ages changed — update ages in-place instead
+  const htmlNoAge = html.replace(/<span class="sb-activity"[^>]*>[^<]*<\\/span>/g, '');
+  if (content._lastHTML === htmlNoAge) {
+    updateSidebarAges();
+    return;
+  }
+  content._lastHTML = htmlNoAge;
   content.innerHTML = html;
 }
 function renderSidebarSession(s, activeTab, isHidden) {
@@ -2602,8 +2631,9 @@ function renderSidebarSession(s, activeTab, isHidden) {
       const cls = w.cc_context_pct <= 10 ? 'critical' : w.cc_context_pct <= 25 ? 'low' : '';
       status = '<span class="sb-ctx ' + cls + '">' + w.cc_context_pct + '%</span>';
     }
-    const age = formatAge(w.activity_age);
-    if (age) status += (status ? ' ' : '') + '<span class="sb-activity">' + age + '</span>';
+    const age = ageFromTs(w.activity_ts);
+    const wid_age = esc(s.name) + ':' + w.index;
+    if (age) status += (status ? ' ' : '') + '<span class="sb-activity" data-wid="' + wid_age + '">' + age + '</span>';
     const statusClass = w.is_cc ? (w.cc_status || 'idle') : '';
     const wid = esc(s.name) + ':' + w.index;
     const isActive = activeTab && activeTab.session === s.name && activeTab.windowIndex === w.index;
@@ -2618,12 +2648,12 @@ function renderSidebarSession(s, activeTab, isHidden) {
       + '<div class="sb-win-name">' + esc(w.name) + '</div>'
       + '<div class="sb-memo" data-wid="' + wid + '" onclick="event.stopPropagation();startMemoEdit(this,\\'' + sEsc + '\\',' + w.index + ')">' + esc(memo) + '</div>'
       + '</div>'
+      + (snippet ? '<div class="sb-snippet" title="' + esc(snippet) + '">' + esc(snippet) + '</div>' : '')
       + (_sidebarExpanded ? '<div class="sb-win-cwd">' + esc(abbreviateCwd(w.cwd)) + '</div>' : '')
       + (_sidebarExpanded && w.is_cc ? '<div class="sb-perm' + (w.cc_perm_mode && /dangerously|skip|bypass/i.test(w.cc_perm_mode) ? ' danger' : '') + '" data-wid="' + wid + '">' + (w.cc_perm_mode ? esc(w.cc_perm_mode) : '') + '</div>' : '')
       + '</div>'
       + '<div class="sb-win-right">'
       + '<div class="sb-win-status ' + statusClass + '" data-wid="' + wid + '">' + status + '</div>'
-      + (snippet ? '<div class="sb-snippet" title="' + esc(snippet) + '">' + esc(snippet) + '</div>' : '')
       + '</div>'
       + '<button class="sb-win-detail-btn" onclick="event.stopPropagation();openWD(\\'' + sEsc + '\\',' + w.index + ')" title="Details">&#8942;</button>'
       + '</div>';
@@ -3007,6 +3037,8 @@ async function init() {
     }
   }
   setInterval(() => { if (!document.hidden) loadDashboard(); }, 3000);
+  // Update activity ages in-place every 30s (between dashboard polls)
+  setInterval(() => { if (!document.hidden) updateSidebarAges(); }, 30000);
 }
 // Pause/resume polling when page visibility changes
 document.addEventListener('visibilitychange', () => {

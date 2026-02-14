@@ -93,6 +93,12 @@
 - **2026-02-13**: Hidden sessions — HIDE button on session header (hover-revealed, always visible on mobile). Hidden sessions collected into collapsible "Hidden (N)" section at bottom. SHOW button to unhide. Persisted to `localStorage hidden-sessions`. Refactored `renderSidebar()` → extracted `renderSidebarSession()` helper.
 - **2026-02-13**: Activity age per window — dashboard API now includes `activity_age` (seconds since tmux `window_activity`). `formatAge()` formats as compact labels (now/3m/2h/1d). Shown per-window in sidebar right column as `.sb-activity`.
 
+## Recently Completed (cont. 12)
+- **2026-02-13**: Snippet in collapsed sidebar — moved snippet from `.sb-win-right` to `.sb-win-info` (below name row), visible in both collapsed and expanded sidebar views.
+- **2026-02-13**: Queue draft preservation — `renderQueuePanel()` saves/restores add-task textarea value across re-renders so typed text survives CC session state changes.
+- **2026-02-13**: Reliable tmux send — removed `send-keys -l` path entirely; all text now uses `load-buffer -` + `paste-buffer -d -p` for atomic delivery. Added `returncode` check to bail if buffer load fails.
+- **2026-02-13**: Activity age blink fix — backend sends epoch timestamp (`activity_ts`) instead of computed age; client computes age via `ageFromTs()`; sidebar caches HTML (stripping age spans) to skip full DOM rebuild when only ages changed; `updateSidebarAges()` does in-place updates; 30s interval for smooth age progression.
+
 ## Active Work
 None
 
