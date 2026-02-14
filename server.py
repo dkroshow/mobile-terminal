@@ -297,7 +297,7 @@ HTML = """\
   --bg: #191a1b; --bg2: #1e1f20; --surface: #232425;
   --border: rgba(255,255,255,0.07); --border2: rgba(255,255,255,0.12);
   --text: #e8e6e3; --text2: #8a8a8a; --text3: #5a5a5a;
-  --accent: #D97757; --accent2: #c4693e; --accent-dim: var(--accent-dim);
+  --accent: #D97757; --accent2: #c4693e; --accent-dim: rgba(217,119,87,0.12);
   --accent-focus: var(--accent-focus); --red: #e5534b;
   --green: #3fb950; --orange: #d29922;
   --safe-top: env(safe-area-inset-top, 0px);
@@ -306,7 +306,7 @@ HTML = """\
   --text-size: 15px; --code-size: 12.5px; --mono-size: 12.5px;
   --turn-pad-v: 16px; --turn-pad-h: 18px; --turn-gap: 12px;
   --turn-radius: 18px; --line-h: 1.7;
-  --sb-name: 12px; --sb-detail: 10px; --sb-tiny: 9px;
+  --sb-name: 15px; --sb-detail: 13px; --sb-tiny: 12px;
 }
 * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
 html, body { height:100%; background:var(--bg); color:var(--text);
@@ -323,14 +323,26 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   padding-top:var(--safe-top); }
 #sidebar.collapsed { width:0; min-width:0; border-right:none; }
 #sidebar.collapsed + #sidebar-resize { display:none; }
+#sidebar-expand { display:none; position:absolute; left:0; top:12px;
+  z-index:50; background:var(--surface); border:1px solid var(--border2); border-left:none;
+  color:var(--text3); cursor:pointer; padding:8px 6px; border-radius:0 8px 8px 0;
+  font-size:16px; line-height:1; transition:all .15s; }
+#sidebar-expand:hover { color:var(--text); background:var(--bg2); }
+#sidebar.collapsed ~ main #sidebar-expand { display:block; }
 #sidebar-header { padding:12px 14px 8px; display:flex; align-items:center;
   justify-content:space-between; flex-shrink:0; }
-#sidebar-header h2 { font-size:13px; font-weight:700; color:var(--text2);
+#sidebar-header h2 { font-size:var(--sb-name); font-weight:700; color:var(--text2);
   text-transform:uppercase; letter-spacing:0.5px; }
+#sb-new-win-btn { background:none; border:none; color:var(--text3); cursor:pointer;
+  font-size:18px; font-weight:300; padding:2px 6px; border-radius:6px; transition:all .15s; margin-left:auto; margin-right:2px; line-height:1; }
+#sb-new-win-btn:hover { color:var(--text); background:var(--surface); }
+#sb-expand-btn { background:none; border:none; color:var(--text3); cursor:pointer;
+  font-size:14px; padding:4px 6px; border-radius:6px; transition:all .15s; margin-right:2px; }
+#sb-expand-btn:hover { color:var(--text); background:var(--surface); }
 #collapse-btn { background:none; border:none; color:var(--text3); cursor:pointer;
   font-size:16px; padding:4px 6px; border-radius:6px; transition:all .15s; }
 #collapse-btn:hover { color:var(--text); background:var(--surface); }
-#sidebar-content { flex:1; overflow-y:auto; padding:0 8px 8px;
+#sidebar-content { flex:1; overflow-y:auto; padding:0 4px 8px;
   -webkit-overflow-scrolling:touch; }
 #sidebar-footer { padding:8px; flex-shrink:0; border-top:1px solid var(--border); }
 #new-win-btn { width:100%; padding:8px; background:var(--surface);
@@ -343,13 +355,13 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .sb-session { margin-bottom:4px; }
 .sb-session.sb-drag-over { border-top:2px solid var(--accent); }
 .sb-session.dragging { opacity:0.4; }
-.sb-session-header { display:flex; align-items:center; gap:6px; padding:8px 8px 4px;
+.sb-session-header { display:flex; align-items:center; gap:6px; padding:8px 4px 4px;
   color:var(--text3); font-size:var(--sb-detail); font-weight:700; text-transform:uppercase;
   letter-spacing:0.5px; cursor:grab; }
 .sb-session-header .sb-badge { font-size:var(--sb-tiny); padding:1px 5px; border-radius:6px;
   background:var(--accent); color:#fff; font-weight:500; text-transform:none;
   letter-spacing:0; }
-.sb-win { display:flex; align-items:center; gap:8px; padding:6px 8px;
+.sb-win { display:flex; align-items:center; gap:8px; padding:6px 4px;
   border-radius:8px; cursor:pointer; transition:all .12s;
   -webkit-user-select:none; user-select:none; }
 .sb-win:hover { background:var(--surface); }
@@ -362,11 +374,14 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .sb-win-dot.thinking { background:var(--orange); animation:pulse 1s ease-in-out infinite; }
 .sb-win-dot.none { background:var(--text3); opacity:0.3; }
 .sb-win-info { flex:1; min-width:0; }
+.sb-win-name-row { display:flex; align-items:baseline; gap:6px; min-width:0; }
 .sb-win-name { font-size:var(--sb-name); font-weight:500; color:var(--text);
-  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:0; max-width:60%; }
 .sb-win-cwd { font-size:var(--sb-detail); color:var(--text3);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.sb-win-right { flex-shrink:0; text-align:right; min-width:0; max-width:45%;
+.sb-perm { font-size:var(--sb-tiny); color:var(--text3); margin-top:1px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sb-win-right { flex-shrink:0; text-align:right; min-width:0; max-width:35%;
   display:flex; flex-direction:column; align-items:flex-end; gap:1px; }
 .sb-win-status { font-size:var(--sb-detail); font-weight:500; color:var(--text3);
   white-space:nowrap; }
@@ -375,14 +390,13 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .sb-ctx { display:inline-block; font-size:var(--sb-tiny); color:var(--text3); margin-left:4px; }
 .sb-ctx.low { color:var(--orange); font-weight:700; }
 .sb-ctx.critical { color:var(--red); font-weight:700; }
-.sb-perm { font-size:var(--sb-tiny); color:var(--text3); margin-top:1px; }
-.sb-perm.danger { color:var(--red); font-weight:600; }
+.sb-perm.danger { color:#a07070; font-weight:600; font-style:italic; }
 .sb-snippet { font-size:var(--sb-detail); color:var(--text3);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   max-width:100%; font-style:italic; }
-.sb-memo { font-size:var(--sb-detail); color:var(--accent); margin-top:2px;
+.sb-memo { font-size:var(--sb-detail); color:rgba(232,230,227,0.55);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-  max-width:180px; cursor:text; min-height:14px; }
+  cursor:text; font-style:italic; flex:1; min-width:0; }
 .sb-memo:empty::before { content:'+ note'; color:var(--text3); opacity:0.5;
   font-style:italic; }
 .sb-memo-edit { font-size:var(--sb-detail); color:var(--text); background:var(--surface);
@@ -598,8 +612,9 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 
 /* Pane input */
 .pane-input { display:none; padding:8px 10px; background:var(--bg2);
-  border-top:1px solid var(--border); flex-shrink:0; }
-.pane-input.visible { display:flex; gap:8px; align-items:flex-end; }
+  border-top:1px solid var(--border); flex-shrink:0; flex-direction:column; gap:6px; }
+.pane-input.visible { display:flex; }
+.pane-input .pane-input-row { display:flex; gap:8px; align-items:flex-end; }
 .pane-input textarea { flex:1; background:var(--surface); color:var(--text);
   border:1px solid var(--border2); border-radius:16px; padding:8px 14px;
   font-size:var(--text-size); font-family:inherit; outline:none; resize:none;
@@ -611,6 +626,10 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   display:flex; align-items:center; justify-content:center; }
 .pane-input .pane-send svg { width:16px; height:16px; }
 .pane-input .pane-send:active { transform:scale(0.92); }
+.pane-toolbar { display:flex; gap:6px; }
+.pane-tray { max-height:0; overflow:hidden; transition:max-height .25s ease, margin .25s ease;
+  display:flex; flex-wrap:wrap; gap:4px; margin-top:0; }
+.pane-tray.open { max-height:100px; margin-top:6px; }
 
 /* Pane placeholder */
 .pane-placeholder { flex:1; display:flex; align-items:center; justify-content:center;
@@ -767,6 +786,8 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 <aside id="sidebar">
   <div id="sidebar-header">
     <h2>Sessions</h2>
+    <button id="sb-new-win-btn" onclick="newWin()" title="New window">+</button>
+    <button id="sb-expand-btn" onclick="toggleSidebarExpand()" title="Toggle detail level">&#9656;</button>
     <button id="collapse-btn" onclick="toggleSidebar()" title="Collapse sidebar">&laquo;</button>
   </div>
   <div id="sidebar-content"></div>
@@ -778,6 +799,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 <div id="sidebar-backdrop" onclick="closeMobileSidebar()"></div>
 
 <main id="main">
+  <button id="sidebar-expand" onclick="toggleSidebar()" title="Open sidebar">&raquo;</button>
   <div id="topbar">
     <div id="topbar-row">
       <button id="hamburger" onclick="openMobileSidebar()">&#9776;</button>
@@ -814,6 +836,8 @@ html, body { height:100%; background:var(--bg); color:var(--text);
       <button class="pill danger" onclick="keyActive('C-c')">Ctrl-C</button>
       <button class="pill" onclick="keyActive('Up')">Up</button>
       <button class="pill" onclick="keyActive('Down')">Down</button>
+      <button class="pill" onclick="keyActive('Left')">Left</button>
+      <button class="pill" onclick="keyActive('Right')">Right</button>
       <button class="pill" onclick="keyActive('Tab')">Tab</button>
       <button class="pill" onclick="keyActive('Escape')">Esc</button>
     </div>
@@ -854,6 +878,7 @@ let _nextPaneId = 1;
 let _nextTabId = 1;
 let _dashboardData = null;
 let _sidebarCollapsed = false;
+let _sidebarExpanded = localStorage.getItem('sidebar:expanded') === 'true';
 let _wdSession = null, _wdWindow = null; // window details modal context
 let _queueStates = {}; // tabId -> { items: [{text, done}], playing: false, currentIdx: null, idleTimer: null }
 
@@ -882,7 +907,9 @@ function md(s) {
         }
       }
       if (inBox) out.push('```');
-      return marked.parse(out.join('\\n'));
+      // Escape HTML tags in terminal output so they render as text, not DOM elements
+      const escaped = out.join('\\n').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return marked.parse(escaped);
     } catch(e) { /* fall through to plain text */ }
   }
   return '<p>' + esc(s) + '</p>';
@@ -1019,7 +1046,7 @@ function updateSidebarStatus(session, windowIndex, ccStatus, contextPct, permMod
   const permEl = document.querySelector('.sb-perm[data-wid="' + wid + '"]');
   if (permEl && permMode) {
     permEl.textContent = permMode;
-    permEl.className = 'sb-perm' + (/dangerously|skip/i.test(permMode) ? ' danger' : '');
+    permEl.className = 'sb-perm' + (/dangerously|skip|bypass/i.test(permMode) ? ' danger' : '');
   }
 }
 
@@ -1200,10 +1227,32 @@ function createPane(parentEl) {
   el.id = 'pane-' + id;
   el.innerHTML = '<div class="pane-tab-bar"></div>'
     + '<div class="pane-placeholder">Open a window from the sidebar</div>'
-    + '<div class="pane-input"><textarea rows="1" placeholder="Enter command..."'
+    + '<div class="pane-input">'
+    + '<div class="pane-input-row"><textarea rows="1" placeholder="Enter command..."'
     + ' autocorrect="off" autocapitalize="none" autocomplete="off"'
     + ' spellcheck="false" enterkeyhint="send"></textarea>'
     + '<button class="pane-send" aria-label="Send">' + SEND_SVG + '</button></div>'
+    + '<div class="pane-toolbar">'
+    + '<button class="pill" onclick="togglePaneTray(this,\\'keys\\')">Keys</button>'
+    + '<button class="pill" onclick="togglePaneTray(this,\\'cmds\\')">Commands</button>'
+    + '</div>'
+    + '<div class="pane-tray pane-tray-keys">'
+    + '<button class="pill" onclick="keyActive(\\'Enter\\')">Return</button>'
+    + '<button class="pill danger" onclick="keyActive(\\'C-c\\')">Ctrl-C</button>'
+    + '<button class="pill" onclick="keyActive(\\'Up\\')">Up</button>'
+    + '<button class="pill" onclick="keyActive(\\'Down\\')">Down</button>'
+    + '<button class="pill" onclick="keyActive(\\'Left\\')">Left</button>'
+    + '<button class="pill" onclick="keyActive(\\'Right\\')">Right</button>'
+    + '<button class="pill" onclick="keyActive(\\'Tab\\')">Tab</button>'
+    + '<button class="pill" onclick="keyActive(\\'Escape\\')">Esc</button>'
+    + '</div>'
+    + '<div class="pane-tray pane-tray-cmds">'
+    + '<button class="pill" onclick="panePrefill(this,\\'/_my_wrap_up\\')">Wrap Up</button>'
+    + '<button class="pill" onclick="panePrefill(this,\\'clear\\')">Clear</button>'
+    + '<button class="pill" onclick="panePrefill(this,\\'/exit\\')">Exit</button>'
+    + '<button class="pill" onclick="sendResumeActive()">Resume</button>'
+    + '</div>'
+    + '</div>'
     + '<div class="drop-indicator"></div>';
   (parentEl || panesContainer).appendChild(el);
   // Pane input handlers
@@ -1215,6 +1264,7 @@ function createPane(parentEl) {
   ta.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (ta.value.trim()) sendToPane(id); else keyActive('Enter'); }
     if (!ta.value && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); keyActive(e.key === 'ArrowUp' ? 'Up' : 'Down'); }
+    if (!ta.value && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); keyActive(e.key === 'ArrowLeft' ? 'Left' : 'Right'); }
     if (!ta.value && e.key === 'Escape') { e.preventDefault(); keyActive('Escape'); }
     if (!ta.value && e.key === 'Tab') { e.preventDefault(); keyActive('Tab'); }
   });
@@ -1517,6 +1567,29 @@ function renderPaneTabs(paneId) {
       tab.style.opacity = '0.5';
     });
     tab.addEventListener('dragend', () => { tab.style.opacity = ''; });
+    tab.addEventListener('dragover', e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      tabBar.querySelectorAll('.pane-tab.drag-over-tab').forEach(t => t.classList.remove('drag-over-tab'));
+      tab.classList.add('drag-over-tab');
+    });
+    tab.addEventListener('dragleave', () => { tab.classList.remove('drag-over-tab'); });
+    tab.addEventListener('drop', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      tab.classList.remove('drag-over-tab');
+      const srcTabId = e.dataTransfer.getData('text/plain');
+      const dstTabId = tab.dataset.tabId;
+      if (srcTabId === dstTabId) return;
+      const pane = panes.find(p => p.tabIds.includes(srcTabId) && p.tabIds.includes(dstTabId));
+      if (!pane) return; // cross-pane drops handled by pane-level handler
+      const srcIdx = pane.tabIds.indexOf(srcTabId);
+      const dstIdx = pane.tabIds.indexOf(dstTabId);
+      pane.tabIds.splice(srcIdx, 1);
+      pane.tabIds.splice(dstIdx, 0, srcTabId);
+      renderPaneTabs(pane.id);
+      saveLayout();
+    });
   });
 }
 
@@ -2308,6 +2381,22 @@ function toggleCmds() {
   if (on) { document.getElementById('keys').classList.remove('open'); document.getElementById('keysBtn').classList.remove('on'); }
 }
 
+function togglePaneTray(btn, which) {
+  const pi = btn.closest('.pane-input');
+  const tray = pi.querySelector('.pane-tray-' + which);
+  const on = tray.classList.toggle('open');
+  btn.classList.toggle('on', on);
+  const other = which === 'keys' ? 'cmds' : 'keys';
+  const otherTray = pi.querySelector('.pane-tray-' + other);
+  const otherBtn = [...pi.querySelectorAll('.pane-toolbar .pill')].find(b => b.textContent === (other === 'keys' ? 'Keys' : 'Commands'));
+  if (on && otherTray) { otherTray.classList.remove('open'); if (otherBtn) otherBtn.classList.remove('on'); }
+}
+
+function panePrefill(btn, text) {
+  const ta = btn.closest('.pane-input').querySelector('textarea');
+  if (ta) { ta.value = ta.value ? ta.value + ' ' + text : text; ta.focus(); }
+}
+
 // === View toggle ===
 function toggleRaw() {
   const active = getActiveTab(); if (!active) return;
@@ -2319,10 +2408,10 @@ function toggleRaw() {
 
 // === Text size ===
 const TEXT_SIZES = [
-  { label: 'A--', text: '11px', code: '10px', mono: '10px', padV: '6px', padH: '8px', gap: '3px', radius: '10px', lineH: '1.4', sbName: '10px', sbDetail: '8px', sbTiny: '7px' },
-  { label: 'A-',  text: '13px', code: '11px', mono: '11px', padV: '8px', padH: '12px', gap: '6px', radius: '14px', lineH: '1.55', sbName: '11px', sbDetail: '9px', sbTiny: '8px' },
-  { label: 'A',   text: '15px', code: '12.5px', mono: '12.5px', padV: '16px', padH: '18px', gap: '12px', radius: '18px', lineH: '1.7', sbName: '12px', sbDetail: '10px', sbTiny: '9px' },
-  { label: 'A+',  text: '17px', code: '14px', mono: '14px', padV: '18px', padH: '20px', gap: '14px', radius: '20px', lineH: '1.8', sbName: '13px', sbDetail: '11px', sbTiny: '10px' },
+  { label: 'A--', text: '11px', code: '10px', mono: '10px', padV: '6px', padH: '8px', gap: '3px', radius: '10px', lineH: '1.4', sbName: '11px', sbDetail: '10px', sbTiny: '9.5px' },
+  { label: 'A-',  text: '13px', code: '11px', mono: '11px', padV: '8px', padH: '12px', gap: '6px', radius: '14px', lineH: '1.55', sbName: '13px', sbDetail: '11.5px', sbTiny: '11px' },
+  { label: 'A',   text: '15px', code: '12.5px', mono: '12.5px', padV: '16px', padH: '18px', gap: '12px', radius: '18px', lineH: '1.7', sbName: '15px', sbDetail: '13px', sbTiny: '12px' },
+  { label: 'A+',  text: '17px', code: '14px', mono: '14px', padV: '18px', padH: '20px', gap: '14px', radius: '20px', lineH: '1.8', sbName: '17px', sbDetail: '15px', sbTiny: '13px' },
 ];
 let _textSizeIdx = 2;
 function applyTextSize(idx) {
@@ -2349,6 +2438,12 @@ function toggleSidebar() {
   _sidebarCollapsed = !_sidebarCollapsed;
   document.getElementById('sidebar').classList.toggle('collapsed', _sidebarCollapsed);
   document.getElementById('collapse-btn').textContent = _sidebarCollapsed ? '\\u00bb' : '\\u00ab';
+}
+function toggleSidebarExpand() {
+  _sidebarExpanded = !_sidebarExpanded;
+  localStorage.setItem('sidebar:expanded', _sidebarExpanded);
+  document.getElementById('sb-expand-btn').innerHTML = _sidebarExpanded ? '&#9662;' : '&#9656;';
+  renderSidebar();
 }
 function openMobileSidebar() {
   document.getElementById('sidebar').classList.add('open');
@@ -2417,8 +2512,6 @@ function renderSidebar() {
   let html = '';
   for (const s of sessions) {
     html += '<div class="sb-session" draggable="true" data-session="' + esc(s.name) + '">';
-    html += '<div class="sb-session-header">' + esc(s.name)
-      + (s.attached ? ' <span class="sb-badge">attached</span>' : '') + '</div>';
     // Sort windows by custom order
     const winOrder = _sidebarOrder.windows[s.name] || [];
     const windows = [...s.windows].sort((a, b) => {
@@ -2429,6 +2522,16 @@ function renderSidebar() {
       if (ib < 0) return 1;
       return ia - ib;
     });
+    const fsEsc = esc(s.name).replace(/'/g, "\\\\'");
+    if (windows.length > 0) {
+      const firstWin = windows[0];
+      const fwEsc = esc(firstWin.name).replace(/'/g, "\\\\'");
+      html += '<div class="sb-session-header" onclick="openTab(\\'' + fsEsc + '\\',' + firstWin.index + ',\\'' + fwEsc + '\\')" style="cursor:pointer">' + esc(s.name)
+        + (s.attached ? ' <span class="sb-badge">attached</span>' : '') + '</div>';
+    } else {
+      html += '<div class="sb-session-header">' + esc(s.name)
+        + (s.attached ? ' <span class="sb-badge">attached</span>' : '') + '</div>';
+    }
     for (const w of windows) {
       const dotClass = w.is_cc ? (w.cc_status || 'idle') : 'none';
       let status = '';
@@ -2446,10 +2549,12 @@ function renderSidebar() {
       html += '<div class="sb-win' + (isActive ? ' active' : '') + '" draggable="true" data-session="' + esc(s.name) + '" data-widx="' + w.index + '">'
         + '<div class="sb-win-dot ' + dotClass + '" data-wid="' + wid + '" onclick="event.stopPropagation();openTab(\\'' + sEsc + '\\',' + w.index + ',\\'' + wEsc + '\\')"></div>'
         + '<div class="sb-win-info" onclick="openTab(\\'' + sEsc + '\\',' + w.index + ',\\'' + wEsc + '\\')">'
+        + '<div class="sb-win-name-row">'
         + '<div class="sb-win-name">' + esc(w.name) + '</div>'
-        + '<div class="sb-win-cwd">' + esc(abbreviateCwd(w.cwd)) + '</div>'
-        + (w.is_cc ? '<div class="sb-perm' + (w.cc_perm_mode && /dangerously|skip/i.test(w.cc_perm_mode) ? ' danger' : '') + '" data-wid="' + wid + '">' + (w.cc_perm_mode ? esc(w.cc_perm_mode) : '') + '</div>' : '')
         + '<div class="sb-memo" data-wid="' + wid + '" onclick="event.stopPropagation();startMemoEdit(this,\\'' + sEsc + '\\',' + w.index + ')">' + esc(memo) + '</div>'
+        + '</div>'
+        + (_sidebarExpanded ? '<div class="sb-win-cwd">' + esc(abbreviateCwd(w.cwd)) + '</div>' : '')
+        + (_sidebarExpanded && w.is_cc ? '<div class="sb-perm' + (w.cc_perm_mode && /dangerously|skip|bypass/i.test(w.cc_perm_mode) ? ' danger' : '') + '" data-wid="' + wid + '">' + (w.cc_perm_mode ? esc(w.cc_perm_mode) : '') + '</div>' : '')
         + '</div>'
         + '<div class="sb-win-right">'
         + '<div class="sb-win-status ' + statusClass + '" data-wid="' + wid + '">' + status + '</div>'
@@ -2587,7 +2692,7 @@ function openWD(session, windowIndex) {
   if (win.is_cc) {
     html += '<div class="wd-row"><span class="wd-label">Status</span><span class="wd-value">' + statusLabel(win.cc_status) + '</span></div>';
     if (win.cc_perm_mode) {
-      const isDanger = /dangerously|skip/i.test(win.cc_perm_mode);
+      const isDanger = /dangerously|skip|bypass/i.test(win.cc_perm_mode);
       html += '<div class="wd-row"><span class="wd-label">Permissions</span><span class="wd-value' + (isDanger ? '" style="color:var(--red);font-weight:600' : '') + '">' + esc(win.cc_perm_mode) + '</span></div>';
     }
     const pct = win.cc_context_pct;
@@ -2702,6 +2807,7 @@ M.addEventListener('paste', () => setTimeout(autoResize, 0));
 M.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (M.value.trim()) sendGlobal(); else keyActive('Enter'); }
   if (!M.value && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); keyActive(e.key === 'ArrowUp' ? 'Up' : 'Down'); }
+  if (!M.value && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); keyActive(e.key === 'ArrowLeft' ? 'Left' : 'Right'); }
   if (!M.value && e.key === 'Escape') { e.preventDefault(); keyActive('Escape'); }
   if (!M.value && e.key === 'Tab') { e.preventDefault(); keyActive('Tab'); }
 });
@@ -2825,6 +2931,7 @@ function cleanupStaleStorage() {
 }
 
 async function init() {
+  if (_sidebarExpanded) document.getElementById('sb-expand-btn').innerHTML = '&#9662;';
   await loadDashboard();
   cleanupStaleStorage();
   if (!restoreLayout()) {
@@ -2879,7 +2986,7 @@ async def api_send(body: dict):
 
 @app.get("/api/key/{key}")
 async def api_key(key: str, session: str = None, window: int = None):
-    ALLOWED = {"C-c", "C-d", "C-l", "C-z", "Up", "Down", "Tab", "Enter", "Escape"}
+    ALLOWED = {"C-c", "C-d", "C-l", "C-z", "Up", "Down", "Left", "Right", "Tab", "Enter", "Escape"}
     if key in ALLOWED:
         send_special(key, session, window)
     return JSONResponse({"ok": True})

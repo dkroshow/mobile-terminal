@@ -84,6 +84,10 @@
 - **2026-02-13**: Sidebar text scales with text size — `--sb-name`/`--sb-detail`/`--sb-tiny` CSS variables scale across all 4 tiers (A-- through A+). All sidebar elements respond to text size toggle.
 - **2026-02-13**: Fixed false positive status dots — removed `activity_age < 5` fallback from `detect_cc_status()`. CC's TUI refreshes periodically keeping activity_age low (~5-7s) even on idle sessions, causing false "working" orange dots. Text signals (`esc to interrupt`, `·` thinking) are sufficient.
 
+## Recently Completed (cont. 10)
+- **2026-02-13**: Per-pane Keys/Commands trays — multi-pane input bars now have collapsible Keys and Commands pill buttons (matching global bar pattern). Collapsed by default, mutually exclusive toggle. Includes Left/Right arrow keys for plan mode horizontal navigation.
+- **2026-02-13**: Left/Right arrow keys added globally — backend ALLOWED set, global keys tray, per-pane keys tray, keyboard forwarding (ArrowLeft/Right when textarea empty) for both global and per-pane textareas.
+
 ## Active Work
 None
 
