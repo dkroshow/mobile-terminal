@@ -88,6 +88,11 @@
 - **2026-02-13**: Per-pane Keys/Commands trays — multi-pane input bars now have collapsible Keys and Commands pill buttons (matching global bar pattern). Collapsed by default, mutually exclusive toggle. Includes Left/Right arrow keys for plan mode horizontal navigation.
 - **2026-02-13**: Left/Right arrow keys added globally — backend ALLOWED set, global keys tray, per-pane keys tray, keyboard forwarding (ArrowLeft/Right when textarea empty) for both global and per-pane textareas.
 
+## Recently Completed (cont. 11)
+- **2026-02-13**: Tab reorder within pane — `dragover`/`dragleave`/`drop` listeners on `.pane-tab` elements enable drag-to-reorder tabs within same pane. Uses existing `.drag-over-tab` CSS. `stopPropagation()` on drop prevents pane-level handler from firing. Cross-pane drag still works (guard checks both tabs in same pane).
+- **2026-02-13**: Hidden sessions — HIDE button on session header (hover-revealed, always visible on mobile). Hidden sessions collected into collapsible "Hidden (N)" section at bottom. SHOW button to unhide. Persisted to `localStorage hidden-sessions`. Refactored `renderSidebar()` → extracted `renderSidebarSession()` helper.
+- **2026-02-13**: Activity age per window — dashboard API now includes `activity_age` (seconds since tmux `window_activity`). `formatAge()` formats as compact labels (now/3m/2h/1d). Shown per-window in sidebar right column as `.sb-activity`.
+
 ## Active Work
 None
 

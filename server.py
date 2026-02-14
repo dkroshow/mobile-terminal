@@ -216,6 +216,7 @@ def get_dashboard() -> dict:
             "cc_context_pct": cc["context_pct"],
             "cc_perm_mode": cc["perm_mode"],
             "preview": preview_short,
+            "activity_age": round(activity_age) if activity_age is not None else None,
         })
     return {"sessions": list(sessions.values())}
 
@@ -361,6 +362,19 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .sb-session-header .sb-badge { font-size:var(--sb-tiny); padding:1px 5px; border-radius:6px;
   background:var(--accent); color:#fff; font-weight:500; text-transform:none;
   letter-spacing:0; }
+.sb-session-header { position:relative; }
+.sb-hide-btn { background:none; border:none; color:var(--text3); font-size:var(--sb-tiny);
+  cursor:pointer; padding:1px 5px; border-radius:4px; opacity:0; transition:opacity .15s;
+  text-transform:none; letter-spacing:0; font-weight:500; margin-left:auto; }
+.sb-session-header:hover .sb-hide-btn { opacity:1; }
+.sb-hide-btn:hover { color:var(--text); background:var(--surface); }
+.sb-hidden-header { padding:12px 4px 4px; color:var(--text3); font-size:var(--sb-detail);
+  font-weight:700; text-transform:uppercase; letter-spacing:0.5px; cursor:pointer;
+  display:flex; align-items:center; gap:4px; user-select:none; }
+.sb-hidden-header:hover { color:var(--text2); }
+.sb-hidden-chevron { transition:transform .15s; font-size:10px; }
+.sb-hidden-chevron.open { transform:rotate(90deg); }
+.sb-activity { font-size:var(--sb-tiny); color:var(--text3); opacity:0.7; white-space:nowrap; }
 .sb-win { display:flex; align-items:center; gap:8px; padding:6px 4px;
   border-radius:8px; cursor:pointer; transition:all .12s;
   -webkit-user-select:none; user-select:none; }
@@ -421,6 +435,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   #sidebar.collapsed { transform:translateX(-100%); }
   #sidebar-backdrop.open { display:block; }
   .sb-win-detail-btn { opacity:1; }
+  .sb-hide-btn { opacity:1; }
 }
 
 /* --- Main area --- */
@@ -1002,6 +1017,33 @@ function startMemoEdit(el, session, windowIndex) {
   });
   input.addEventListener('click', (e) => e.stopPropagation());
 }
+// === Hidden sessions ===
+function getHiddenSessions() {
+  try { return JSON.parse(localStorage.getItem('hidden-sessions') || '[]'); } catch { return []; }
+}
+function setHiddenSessions(arr) {
+  localStorage.setItem('hidden-sessions', JSON.stringify(arr));
+}
+function hideSession(name) {
+  const h = getHiddenSessions();
+  if (!h.includes(name)) { h.push(name); setHiddenSessions(h); }
+  renderSidebar();
+}
+function unhideSession(name) {
+  setHiddenSessions(getHiddenSessions().filter(s => s !== name));
+  renderSidebar();
+}
+let _hiddenExpanded = false;
+
+// === Activity age formatting ===
+function formatAge(seconds) {
+  if (seconds == null) return '';
+  if (seconds < 60) return 'now';
+  if (seconds < 3600) return Math.floor(seconds / 60) + 'm';
+  if (seconds < 86400) return Math.floor(seconds / 3600) + 'h';
+  return Math.floor(seconds / 86400) + 'd';
+}
+
 function detectCCStatus(text) {
   // Quick client-side CC status detection from output text
   // Returns {status, contextPct, permMode} or null
@@ -2509,63 +2551,85 @@ function renderSidebar() {
   // Determine the active window for highlighting
   const activePn = panes.find(p => p.id === activePaneId);
   const activeTab = activePn && activePn.activeTabId ? allTabs[activePn.activeTabId] : null;
+  const hidden = getHiddenSessions();
+  const visibleSessions = sessions.filter(s => !hidden.includes(s.name));
+  const hiddenSessions = sessions.filter(s => hidden.includes(s.name));
   let html = '';
-  for (const s of sessions) {
-    html += '<div class="sb-session" draggable="true" data-session="' + esc(s.name) + '">';
-    // Sort windows by custom order
-    const winOrder = _sidebarOrder.windows[s.name] || [];
-    const windows = [...s.windows].sort((a, b) => {
-      const ia = winOrder.indexOf(a.index);
-      const ib = winOrder.indexOf(b.index);
-      if (ia < 0 && ib < 0) return 0;
-      if (ia < 0) return 1;
-      if (ib < 0) return 1;
-      return ia - ib;
-    });
-    const fsEsc = esc(s.name).replace(/'/g, "\\\\'");
-    if (windows.length > 0) {
-      const firstWin = windows[0];
-      const fwEsc = esc(firstWin.name).replace(/'/g, "\\\\'");
-      html += '<div class="sb-session-header" onclick="openTab(\\'' + fsEsc + '\\',' + firstWin.index + ',\\'' + fwEsc + '\\')" style="cursor:pointer">' + esc(s.name)
-        + (s.attached ? ' <span class="sb-badge">attached</span>' : '') + '</div>';
-    } else {
-      html += '<div class="sb-session-header">' + esc(s.name)
-        + (s.attached ? ' <span class="sb-badge">attached</span>' : '') + '</div>';
-    }
-    for (const w of windows) {
-      const dotClass = w.is_cc ? (w.cc_status || 'idle') : 'none';
-      let status = '';
-      if (w.cc_context_pct != null) {
-        const cls = w.cc_context_pct <= 10 ? 'critical' : w.cc_context_pct <= 25 ? 'low' : '';
-        status = '<span class="sb-ctx ' + cls + '">' + w.cc_context_pct + '%</span>';
+  for (const s of visibleSessions) {
+    html += renderSidebarSession(s, activeTab, false);
+  }
+  // Hidden sessions section
+  if (hiddenSessions.length > 0) {
+    html += '<div class="sb-hidden-header" onclick="_hiddenExpanded=!_hiddenExpanded;renderSidebar()">'
+      + '<span class="sb-hidden-chevron' + (_hiddenExpanded ? ' open' : '') + '">&#9654;</span>'
+      + ' Hidden (' + hiddenSessions.length + ')</div>';
+    if (_hiddenExpanded) {
+      for (const s of hiddenSessions) {
+        html += renderSidebarSession(s, activeTab, true);
       }
-      const statusClass = w.is_cc ? (w.cc_status || 'idle') : '';
-      const wid = esc(s.name) + ':' + w.index;
-      const isActive = activeTab && activeTab.session === s.name && activeTab.windowIndex === w.index;
-      const snippet = (w.is_cc && w.cc_status === 'idle') ? extractSnippet(w.preview, true) : '';
-      const memo = getMemo(s.name, w.index);
-      const sEsc = esc(s.name).replace(/'/g, "\\\\'");
-      const wEsc = esc(w.name).replace(/'/g, "\\\\'");
-      html += '<div class="sb-win' + (isActive ? ' active' : '') + '" draggable="true" data-session="' + esc(s.name) + '" data-widx="' + w.index + '">'
-        + '<div class="sb-win-dot ' + dotClass + '" data-wid="' + wid + '" onclick="event.stopPropagation();openTab(\\'' + sEsc + '\\',' + w.index + ',\\'' + wEsc + '\\')"></div>'
-        + '<div class="sb-win-info" onclick="openTab(\\'' + sEsc + '\\',' + w.index + ',\\'' + wEsc + '\\')">'
-        + '<div class="sb-win-name-row">'
-        + '<div class="sb-win-name">' + esc(w.name) + '</div>'
-        + '<div class="sb-memo" data-wid="' + wid + '" onclick="event.stopPropagation();startMemoEdit(this,\\'' + sEsc + '\\',' + w.index + ')">' + esc(memo) + '</div>'
-        + '</div>'
-        + (_sidebarExpanded ? '<div class="sb-win-cwd">' + esc(abbreviateCwd(w.cwd)) + '</div>' : '')
-        + (_sidebarExpanded && w.is_cc ? '<div class="sb-perm' + (w.cc_perm_mode && /dangerously|skip|bypass/i.test(w.cc_perm_mode) ? ' danger' : '') + '" data-wid="' + wid + '">' + (w.cc_perm_mode ? esc(w.cc_perm_mode) : '') + '</div>' : '')
-        + '</div>'
-        + '<div class="sb-win-right">'
-        + '<div class="sb-win-status ' + statusClass + '" data-wid="' + wid + '">' + status + '</div>'
-        + (snippet ? '<div class="sb-snippet" title="' + esc(snippet) + '">' + esc(snippet) + '</div>' : '')
-        + '</div>'
-        + '<button class="sb-win-detail-btn" onclick="event.stopPropagation();openWD(\\'' + sEsc + '\\',' + w.index + ')" title="Details">&#8942;</button>'
-        + '</div>';
     }
-    html += '</div>';
   }
   content.innerHTML = html;
+}
+function renderSidebarSession(s, activeTab, isHidden) {
+  let html = '<div class="sb-session" draggable="true" data-session="' + esc(s.name) + '">';
+  const winOrder = _sidebarOrder.windows[s.name] || [];
+  const windows = [...s.windows].sort((a, b) => {
+    const ia = winOrder.indexOf(a.index);
+    const ib = winOrder.indexOf(b.index);
+    if (ia < 0 && ib < 0) return 0;
+    if (ia < 0) return 1;
+    if (ib < 0) return 1;
+    return ia - ib;
+  });
+  const fsEsc = esc(s.name).replace(/'/g, "\\\\'");
+  const hideBtn = isHidden
+    ? '<button class="sb-hide-btn" onclick="event.stopPropagation();unhideSession(\\'' + fsEsc + '\\')">SHOW</button>'
+    : '<button class="sb-hide-btn" onclick="event.stopPropagation();hideSession(\\'' + fsEsc + '\\')">HIDE</button>';
+  if (windows.length > 0) {
+    const firstWin = windows[0];
+    const fwEsc = esc(firstWin.name).replace(/'/g, "\\\\'");
+    html += '<div class="sb-session-header" onclick="openTab(\\'' + fsEsc + '\\',' + firstWin.index + ',\\'' + fwEsc + '\\')" style="cursor:pointer">' + esc(s.name)
+      + (s.attached ? ' <span class="sb-badge">attached</span>' : '') + hideBtn + '</div>';
+  } else {
+    html += '<div class="sb-session-header">' + esc(s.name)
+      + (s.attached ? ' <span class="sb-badge">attached</span>' : '') + hideBtn + '</div>';
+  }
+  for (const w of windows) {
+    const dotClass = w.is_cc ? (w.cc_status || 'idle') : 'none';
+    let status = '';
+    if (w.cc_context_pct != null) {
+      const cls = w.cc_context_pct <= 10 ? 'critical' : w.cc_context_pct <= 25 ? 'low' : '';
+      status = '<span class="sb-ctx ' + cls + '">' + w.cc_context_pct + '%</span>';
+    }
+    const age = formatAge(w.activity_age);
+    if (age) status += (status ? ' ' : '') + '<span class="sb-activity">' + age + '</span>';
+    const statusClass = w.is_cc ? (w.cc_status || 'idle') : '';
+    const wid = esc(s.name) + ':' + w.index;
+    const isActive = activeTab && activeTab.session === s.name && activeTab.windowIndex === w.index;
+    const snippet = (w.is_cc && w.cc_status === 'idle') ? extractSnippet(w.preview, true) : '';
+    const memo = getMemo(s.name, w.index);
+    const sEsc = esc(s.name).replace(/'/g, "\\\\'");
+    const wEsc = esc(w.name).replace(/'/g, "\\\\'");
+    html += '<div class="sb-win' + (isActive ? ' active' : '') + '" draggable="true" data-session="' + esc(s.name) + '" data-widx="' + w.index + '">'
+      + '<div class="sb-win-dot ' + dotClass + '" data-wid="' + wid + '" onclick="event.stopPropagation();openTab(\\'' + sEsc + '\\',' + w.index + ',\\'' + wEsc + '\\')"></div>'
+      + '<div class="sb-win-info" onclick="openTab(\\'' + sEsc + '\\',' + w.index + ',\\'' + wEsc + '\\')">'
+      + '<div class="sb-win-name-row">'
+      + '<div class="sb-win-name">' + esc(w.name) + '</div>'
+      + '<div class="sb-memo" data-wid="' + wid + '" onclick="event.stopPropagation();startMemoEdit(this,\\'' + sEsc + '\\',' + w.index + ')">' + esc(memo) + '</div>'
+      + '</div>'
+      + (_sidebarExpanded ? '<div class="sb-win-cwd">' + esc(abbreviateCwd(w.cwd)) + '</div>' : '')
+      + (_sidebarExpanded && w.is_cc ? '<div class="sb-perm' + (w.cc_perm_mode && /dangerously|skip|bypass/i.test(w.cc_perm_mode) ? ' danger' : '') + '" data-wid="' + wid + '">' + (w.cc_perm_mode ? esc(w.cc_perm_mode) : '') + '</div>' : '')
+      + '</div>'
+      + '<div class="sb-win-right">'
+      + '<div class="sb-win-status ' + statusClass + '" data-wid="' + wid + '">' + status + '</div>'
+      + (snippet ? '<div class="sb-snippet" title="' + esc(snippet) + '">' + esc(snippet) + '</div>' : '')
+      + '</div>'
+      + '<button class="sb-win-detail-btn" onclick="event.stopPropagation();openWD(\\'' + sEsc + '\\',' + w.index + ')" title="Details">&#8942;</button>'
+      + '</div>';
+  }
+  html += '</div>';
+  return html;
 }
 
 function openTab(session, windowIndex, windowName) {
