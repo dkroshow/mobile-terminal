@@ -99,6 +99,9 @@
 - **2026-02-13**: Reliable tmux send — removed `send-keys -l` path entirely; all text now uses `load-buffer -` + `paste-buffer -d -p` for atomic delivery. Added `returncode` check to bail if buffer load fails.
 - **2026-02-13**: Activity age blink fix — backend sends epoch timestamp (`activity_ts`) instead of computed age; client computes age via `ageFromTs()`; sidebar caches HTML (stripping age spans) to skip full DOM rebuild when only ages changed; `updateSidebarAges()` does in-place updates; 30s interval for smooth age progression.
 
+## Recently Completed (cont. 13)
+- **2026-02-14**: Server-side preferences persistence — `~/.mobile-terminal-prefs.json` backend with `GET/PUT /api/prefs` endpoints (atomic writes via tmp+rename). Frontend `prefs` JS object replaces `localStorage` for all synced keys (`textSize`, `sidebar:*`, `hidden-sessions`, `memo:*`, `queue:*`, `notepad:*`). In-memory cache with 500ms debounced flush, retry on failure. Auto-migration from localStorage on first run (first device seeds server). `layout` stays in localStorage (per-device). Early-executing reads deferred into `init()` after `await prefs.load()`. `cleanupStaleStorage()` iterates `prefs.keys()` instead of localStorage.
+
 ## Active Work
 None
 

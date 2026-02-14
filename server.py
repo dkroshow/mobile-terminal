@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Mobile web terminal for remote tmux control."""
+import json
 import os
 import re
 import shutil
@@ -71,7 +72,8 @@ def _tmux_target(session=None, window=None):
 
 def send_keys(text: str, session=None, window=None):
     target = _tmux_target(session, window)
-    # Clear any existing input on the line before sending (Ctrl-U)
+    # Escape dismisses any active CC suggestion/autocomplete, C-u clears the line
+    _run(["tmux", "send-keys", "-t", target, "Escape"])
     _run(["tmux", "send-keys", "-t", target, "C-u"])
     # Always use load-buffer + paste-buffer for reliable delivery.
     # send-keys -l is unreliable: special chars ($, \, `, ") can be interpreted by tmux,
@@ -884,6 +886,76 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 
 <script src="https://cdn.jsdelivr.net/npm/marked/lib/marked.umd.min.js"></script>
 <script>
+// === Prefs (server-synced preferences) ===
+const prefs = {
+  _cache: {},
+  _dirty: {},
+  _timer: null,
+  _localKeys: new Set(['layout']),
+  getItem(key) {
+    if (this._localKeys.has(key)) return localStorage.getItem(key);
+    const v = this._cache[key];
+    return v === undefined ? null : v;
+  },
+  setItem(key, val) {
+    if (this._localKeys.has(key)) { localStorage.setItem(key, val); return; }
+    this._cache[key] = val;
+    this._dirty[key] = val;
+    this._scheduleFlush();
+  },
+  removeItem(key) {
+    if (this._localKeys.has(key)) { localStorage.removeItem(key); return; }
+    delete this._cache[key];
+    this._dirty[key] = null;
+    this._scheduleFlush();
+  },
+  _scheduleFlush() {
+    if (this._timer) clearTimeout(this._timer);
+    this._timer = setTimeout(() => this._flush(), 500);
+  },
+  async _flush() {
+    this._timer = null;
+    const batch = this._dirty;
+    this._dirty = {};
+    try {
+      await fetch('/api/prefs', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(batch) });
+    } catch(e) {
+      // Re-queue on failure
+      for (const k in batch) { if (!(k in this._dirty)) this._dirty[k] = batch[k]; }
+      this._scheduleFlush();
+    }
+  },
+  async load() {
+    try {
+      const r = await fetch('/api/prefs');
+      const data = await r.json();
+      if (Object.keys(data).length > 0) {
+        this._cache = data;
+      } else {
+        // First run: migrate synced keys from localStorage to server
+        const batch = {};
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && !this._localKeys.has(key)) {
+            batch[key] = localStorage.getItem(key);
+            this._cache[key] = batch[key];
+          }
+        }
+        if (Object.keys(batch).length > 0) {
+          await fetch('/api/prefs', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(batch) });
+        }
+      }
+    } catch(e) {
+      // Offline fallback: use localStorage
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && !this._localKeys.has(key)) this._cache[key] = localStorage.getItem(key);
+      }
+    }
+  },
+  keys() { return Object.keys(this._cache); }
+};
+
 // === Data model ===
 let panes = [];         // [{ id, tabIds, activeTabId }]
 let activePaneId = null;
@@ -893,7 +965,7 @@ let _nextPaneId = 1;
 let _nextTabId = 1;
 let _dashboardData = null;
 let _sidebarCollapsed = false;
-let _sidebarExpanded = localStorage.getItem('sidebar:expanded') === 'true';
+let _sidebarExpanded = false;
 let _wdSession = null, _wdWindow = null; // window details modal context
 let _queueStates = {}; // tabId -> { items: [{text, done}], playing: false, currentIdx: null, idleTimer: null }
 
@@ -986,12 +1058,12 @@ function extractSnippet(preview, isCC) {
   return '';
 }
 function getMemo(session, windowIndex) {
-  return localStorage.getItem('memo:' + session + ':' + windowIndex) || '';
+  return prefs.getItem('memo:' + session + ':' + windowIndex) || '';
 }
 function setMemo(session, windowIndex, text) {
   const key = 'memo:' + session + ':' + windowIndex;
-  if (text) localStorage.setItem(key, text);
-  else localStorage.removeItem(key);
+  if (text) prefs.setItem(key, text);
+  else prefs.removeItem(key);
 }
 function startMemoEdit(el, session, windowIndex) {
   if (el.querySelector('.sb-memo-edit')) return;
@@ -1019,10 +1091,10 @@ function startMemoEdit(el, session, windowIndex) {
 }
 // === Hidden sessions ===
 function getHiddenSessions() {
-  try { return JSON.parse(localStorage.getItem('hidden-sessions') || '[]'); } catch { return []; }
+  try { return JSON.parse(prefs.getItem('hidden-sessions') || '[]'); } catch { return []; }
 }
 function setHiddenSessions(arr) {
-  localStorage.setItem('hidden-sessions', JSON.stringify(arr));
+  prefs.setItem('hidden-sessions', JSON.stringify(arr));
 }
 function hideSession(name) {
   const h = getHiddenSessions();
@@ -1731,7 +1803,7 @@ function toggleNotepad(paneId) {
       const pn = panes.find(x => x.id === paneId);
       if (!pn || !pn.activeTabId) return;
       const key = notepadKey(pn.activeTabId);
-      if (key) try { localStorage.setItem(key, this.value); } catch(e) {}
+      if (key) try { prefs.setItem(key, this.value); } catch(e) {}
     });
     // Drag-to-resize (bottom=vertical, left=horizontal, corner=both)
     function setupResize(handle, mode) {
@@ -1743,7 +1815,7 @@ function toggleNotepad(paneId) {
       function onUp() {
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onUp);
-        try { localStorage.setItem('notepad:size', JSON.stringify({
+        try { prefs.setItem('notepad:size', JSON.stringify({
           w: panel.style.width, h: panel.style.height
         })); } catch(e) {}
       }
@@ -1760,7 +1832,7 @@ function toggleNotepad(paneId) {
     setupResize(panel.querySelector('.notepad-resize-corner'), 'both');
     // Restore saved size
     try {
-      const saved = localStorage.getItem('notepad:size');
+      const saved = prefs.getItem('notepad:size');
       if (saved) {
         const sz = JSON.parse(saved);
         if (sz.w) panel.style.width = sz.w;
@@ -1773,7 +1845,7 @@ function toggleNotepad(paneId) {
   const key = notepadKey(pane.activeTabId);
   const ta = panel.querySelector('textarea');
   if (key) {
-    try { ta.value = localStorage.getItem(key) || ''; } catch(e) { ta.value = ''; }
+    try { ta.value = prefs.getItem(key) || ''; } catch(e) { ta.value = ''; }
   } else { ta.value = ''; }
   panel.classList.add('open');
   paneEl.querySelector('.pane-notepad-btn')?.classList.add('active');
@@ -1790,7 +1862,7 @@ function updateNotepadContent(paneId) {
   const key = notepadKey(pane.activeTabId);
   const ta = panel.querySelector('textarea');
   if (key) {
-    try { ta.value = localStorage.getItem(key) || ''; } catch(e) { ta.value = ''; }
+    try { ta.value = prefs.getItem(key) || ''; } catch(e) { ta.value = ''; }
   } else { ta.value = ''; }
 }
 
@@ -1807,7 +1879,7 @@ function getQueueState(tabId) {
     const key = queueKey(tabId);
     if (key) {
       try {
-        const saved = localStorage.getItem(key);
+        const saved = prefs.getItem(key);
         if (saved) items = JSON.parse(saved);
       } catch(e) {}
     }
@@ -1821,7 +1893,7 @@ function saveQueue(tabId) {
   if (!key) return;
   const qs = _queueStates[tabId];
   if (!qs) return;
-  try { localStorage.setItem(key, JSON.stringify(qs.items)); } catch(e) {}
+  try { prefs.setItem(key, JSON.stringify(qs.items)); } catch(e) {}
 }
 
 function toggleQueue(paneId) {
@@ -2489,13 +2561,9 @@ function applyTextSize(idx) {
   r.setProperty('--sb-name', s.sbName); r.setProperty('--sb-detail', s.sbDetail);
   r.setProperty('--sb-tiny', s.sbTiny);
   document.getElementById('size-btn').textContent = s.label;
-  try { localStorage.setItem('textSize', idx); } catch(e) {}
+  try { prefs.setItem('textSize', idx); } catch(e) {}
 }
 function cycleTextSize() { applyTextSize((_textSizeIdx + 1) % TEXT_SIZES.length); }
-try {
-  const saved = localStorage.getItem('textSize');
-  if (saved !== null) applyTextSize(parseInt(saved));
-} catch(e) {}
 
 // === Sidebar ===
 function toggleSidebar() {
@@ -2505,7 +2573,7 @@ function toggleSidebar() {
 }
 function toggleSidebarExpand() {
   _sidebarExpanded = !_sidebarExpanded;
-  localStorage.setItem('sidebar:expanded', _sidebarExpanded);
+  prefs.setItem('sidebar:expanded', _sidebarExpanded);
   document.getElementById('sb-expand-btn').innerHTML = _sidebarExpanded ? '&#9662;' : '&#9656;';
   renderSidebar();
 }
@@ -2524,8 +2592,6 @@ function closeMobileSidebar() {
   const handle = document.getElementById('sidebar-resize');
   const sidebar = document.getElementById('sidebar');
   let startX, startW;
-  const saved = localStorage.getItem('sidebar:width');
-  if (saved) document.documentElement.style.setProperty('--sidebar-w', saved + 'px');
   handle.addEventListener('pointerdown', e => {
     if (_sidebarCollapsed) return;
     e.preventDefault();
@@ -2541,7 +2607,7 @@ function closeMobileSidebar() {
       handle.classList.remove('active');
       sidebar.style.transition = '';
       const w = Math.max(160, Math.min(500, startW + ev.clientX - startX));
-      localStorage.setItem('sidebar:width', w);
+      prefs.setItem('sidebar:width', w);
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', onUp);
     }
@@ -2551,7 +2617,6 @@ function closeMobileSidebar() {
 })();
 
 let _sidebarOrder = { sessions: [], windows: {} };
-try { const so = JSON.parse(localStorage.getItem('sidebar:order')); if (so) _sidebarOrder = so; } catch(e) {}
 let _sbDragging = false;
 
 function renderSidebar() {
@@ -2760,7 +2825,7 @@ function openTab(session, windowIndex, windowName) {
 })();
 
 function saveSidebarOrder() {
-  try { localStorage.setItem('sidebar:order', JSON.stringify(_sidebarOrder)); } catch(e) {}
+  try { prefs.setItem('sidebar:order', JSON.stringify(_sidebarOrder)); } catch(e) {}
 }
 
 // === Window details modal ===
@@ -2995,7 +3060,7 @@ function restoreLayout() {
 }
 
 function cleanupStaleStorage() {
-  // Remove localStorage keys for windows/sessions that no longer exist
+  // Remove prefs keys for windows/sessions that no longer exist
   if (!_dashboardData) return;
   const validKeys = new Set();
   for (const s of _dashboardData.sessions) {
@@ -3003,12 +3068,11 @@ function cleanupStaleStorage() {
   }
   const prefixes = ['notepad:', 'memo:', 'queue:'];
   try {
-    for (let i = localStorage.length - 1; i >= 0; i--) {
-      const key = localStorage.key(i);
+    for (const key of prefs.keys()) {
       for (const pfx of prefixes) {
-        if (key && key.startsWith(pfx)) {
+        if (key.startsWith(pfx)) {
           const rest = key.slice(pfx.length);
-          if (!validKeys.has(rest)) localStorage.removeItem(key);
+          if (!validKeys.has(rest)) prefs.removeItem(key);
         }
       }
     }
@@ -3025,7 +3089,13 @@ function cleanupStaleStorage() {
 }
 
 async function init() {
+  await prefs.load();
+  // Restore deferred prefs
+  _sidebarExpanded = prefs.getItem('sidebar:expanded') === 'true';
   if (_sidebarExpanded) document.getElementById('sb-expand-btn').innerHTML = '&#9662;';
+  try { const saved = prefs.getItem('textSize'); if (saved !== null) applyTextSize(parseInt(saved)); } catch(e) {}
+  try { const sw = prefs.getItem('sidebar:width'); if (sw) document.documentElement.style.setProperty('--sidebar-w', sw + 'px'); } catch(e) {}
+  try { const so = JSON.parse(prefs.getItem('sidebar:order')); if (so) _sidebarOrder = so; } catch(e) {}
   await loadDashboard();
   cleanupStaleStorage();
   if (!restoreLayout()) {
@@ -3195,6 +3265,39 @@ async def api_rename_session(name: str, body: dict):
     global _current_session
     if _current_session == name:
         _current_session = new_name
+    return JSONResponse({"ok": True})
+
+
+PREFS_FILE = Path.home() / ".mobile-terminal-prefs.json"
+
+
+def _load_prefs() -> dict:
+    try:
+        return json.loads(PREFS_FILE.read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_prefs(data: dict):
+    tmp = PREFS_FILE.with_suffix('.tmp')
+    tmp.write_text(json.dumps(data, indent=2))
+    tmp.rename(PREFS_FILE)
+
+
+@app.get("/api/prefs")
+async def api_get_prefs():
+    return JSONResponse(_load_prefs())
+
+
+@app.put("/api/prefs")
+async def api_put_prefs(body: dict):
+    data = _load_prefs()
+    for k, v in body.items():
+        if v is None:
+            data.pop(k, None)
+        else:
+            data[k] = v
+    _save_prefs(data)
     return JSONResponse({"ok": True})
 
 
