@@ -103,7 +103,7 @@
 - **2026-02-14**: Server-side preferences persistence — `~/.mobile-terminal-prefs.json` backend with `GET/PUT /api/prefs` endpoints (atomic writes via tmp+rename). Frontend `prefs` JS object replaces `localStorage` for all synced keys (`textSize`, `sidebar:*`, `hidden-sessions`, `memo:*`, `queue:*`, `notepad:*`). In-memory cache with 500ms debounced flush, retry on failure. Auto-migration from localStorage on first run (first device seeds server). `layout` stays in localStorage (per-device). Early-executing reads deferred into `init()` after `await prefs.load()`. `cleanupStaleStorage()` iterates `prefs.keys()` instead of localStorage.
 
 ## Recently Completed (cont. 14)
-- **2026-02-14**: Fix mobile send reliability — two bugs: (1) iOS `e.isComposing` race — predictive text fires Enter keydown with `isComposing=true` to confirm autocomplete, handler was intercepting and sending incomplete text; added `!e.isComposing` guard to both global and per-pane keydown handlers. (2) Silent fetch failure — `catch(e) {}` swallowed network errors after clearing textarea; now restores text to input and clears `pendingMsg`/`awaitingResponse` on failure.
+- **2026-02-14**: Fix mobile send reliability — Enter key on mobile Chrome fires `keydown` with `key:'Process'` (keyCode 229) instead of `'Enter'` when virtual keyboard has predictive text active. `e.isComposing` and `compositionstart/end` tracking both unreliable on mobile browsers. Fixed by switching Enter detection to `beforeinput` event with `inputType === 'insertParagraph'` which fires reliably across all mobile browsers. Arrow/Tab/Escape remain in `keydown` (desktop-only use). Also: fetch errors on `/api/send` now restore text to textarea instead of silently swallowing.
 
 ## Active Work
 None
