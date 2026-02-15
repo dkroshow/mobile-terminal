@@ -1388,10 +1388,13 @@ function createPane(parentEl) {
   const ta = el.querySelector('.pane-input textarea');
   const sendBtn = el.querySelector('.pane-send');
   const paneResize = () => { const max=window.innerHeight*0.4; ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,max)+'px'; ta.style.overflowY=ta.scrollHeight>max?'auto':'hidden'; };
+  let _paneComposing = false;
+  ta.addEventListener('compositionstart', () => { _paneComposing = true; });
+  ta.addEventListener('compositionend', () => { _paneComposing = false; });
   ta.addEventListener('input', paneResize);
   ta.addEventListener('paste', () => setTimeout(paneResize, 0));
   ta.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (ta.value.trim()) sendToPane(id); else keyActive('Enter'); }
+    if (e.key === 'Enter' && !e.shiftKey && !_paneComposing) { e.preventDefault(); if (ta.value.trim()) sendToPane(id); else keyActive('Enter'); }
     if (!ta.value && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); keyActive(e.key === 'ArrowUp' ? 'Up' : 'Down'); }
     if (!ta.value && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); keyActive(e.key === 'ArrowLeft' ? 'Left' : 'Right'); }
     if (!ta.value && e.key === 'Escape') { e.preventDefault(); keyActive('Escape'); }
@@ -2965,6 +2968,10 @@ async function newWin() {
 }
 
 // === Input ===
+// Track IME composition state manually — e.isComposing is unreliable on iOS Safari
+let _composing = false;
+M.addEventListener('compositionstart', () => { _composing = true; });
+M.addEventListener('compositionend', () => { _composing = false; });
 function autoResize() {
   const max = window.innerHeight * 0.4;
   M.style.height = 'auto';
@@ -2974,7 +2981,7 @@ function autoResize() {
 M.addEventListener('input', autoResize);
 M.addEventListener('paste', () => setTimeout(autoResize, 0));
 M.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (M.value.trim()) sendGlobal(); else keyActive('Enter'); }
+  if (e.key === 'Enter' && !e.shiftKey && !_composing) { e.preventDefault(); if (M.value.trim()) sendGlobal(); else keyActive('Enter'); }
   if (!M.value && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); keyActive(e.key === 'ArrowUp' ? 'Up' : 'Down'); }
   if (!M.value && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); keyActive(e.key === 'ArrowLeft' ? 'Left' : 'Right'); }
   if (!M.value && e.key === 'Escape') { e.preventDefault(); keyActive('Escape'); }
