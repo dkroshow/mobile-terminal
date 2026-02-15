@@ -1390,15 +1390,19 @@ function createPane(parentEl) {
   const paneResize = () => { const max=window.innerHeight*0.4; ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,max)+'px'; ta.style.overflowY=ta.scrollHeight>max?'auto':'hidden'; };
   ta.addEventListener('input', paneResize);
   ta.addEventListener('paste', () => setTimeout(paneResize, 0));
-  // Enter via beforeinput — reliable on mobile Chrome/Safari (keydown reports key='Process' on mobile)
-  ta.addEventListener('beforeinput', e => {
-    if (e.inputType === 'insertParagraph') { e.preventDefault(); if (ta.value.trim()) sendToPane(id); else keyActive('Enter'); }
-  });
+  // Enter: keydown for desktop, beforeinput fallback for mobile Chrome (fires key='Process')
+  let _pEnterHandled = false, _pShift = false;
   ta.addEventListener('keydown', e => {
+    _pShift = e.shiftKey;
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _pEnterHandled = true; if (ta.value.trim()) sendToPane(id); else keyActive('Enter'); }
     if (!ta.value && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); keyActive(e.key === 'ArrowUp' ? 'Up' : 'Down'); }
     if (!ta.value && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); keyActive(e.key === 'ArrowLeft' ? 'Left' : 'Right'); }
     if (!ta.value && e.key === 'Escape') { e.preventDefault(); keyActive('Escape'); }
     if (!ta.value && e.key === 'Tab') { e.preventDefault(); keyActive('Tab'); }
+  });
+  ta.addEventListener('beforeinput', e => {
+    if (e.inputType === 'insertLineBreak' && !_pEnterHandled && !_pShift) { e.preventDefault(); if (ta.value.trim()) sendToPane(id); else keyActive('Enter'); }
+    _pEnterHandled = false;
   });
   sendBtn.addEventListener('click', () => sendToPane(id));
   // Click anywhere on pane to focus it
@@ -2976,15 +2980,19 @@ function autoResize() {
 }
 M.addEventListener('input', autoResize);
 M.addEventListener('paste', () => setTimeout(autoResize, 0));
-// Enter via beforeinput — reliable on mobile Chrome/Safari (keydown reports key='Process' on mobile)
-M.addEventListener('beforeinput', e => {
-  if (e.inputType === 'insertParagraph') { e.preventDefault(); if (M.value.trim()) sendGlobal(); else keyActive('Enter'); }
-});
+// Enter: keydown for desktop, beforeinput fallback for mobile Chrome (fires key='Process')
+let _gEnterHandled = false, _gShift = false;
 M.addEventListener('keydown', e => {
+  _gShift = e.shiftKey;
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _gEnterHandled = true; if (M.value.trim()) sendGlobal(); else keyActive('Enter'); }
   if (!M.value && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); keyActive(e.key === 'ArrowUp' ? 'Up' : 'Down'); }
   if (!M.value && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); keyActive(e.key === 'ArrowLeft' ? 'Left' : 'Right'); }
   if (!M.value && e.key === 'Escape') { e.preventDefault(); keyActive('Escape'); }
   if (!M.value && e.key === 'Tab') { e.preventDefault(); keyActive('Tab'); }
+});
+M.addEventListener('beforeinput', e => {
+  if (e.inputType === 'insertLineBreak' && !_gEnterHandled && !_gShift) { e.preventDefault(); if (M.value.trim()) sendGlobal(); else keyActive('Enter'); }
+  _gEnterHandled = false;
 });
 
 // === iOS keyboard ===
