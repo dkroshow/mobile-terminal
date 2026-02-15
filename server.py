@@ -20,6 +20,9 @@ _current_session = SESSION  # Mutable — can be switched at runtime
 TITLE = os.environ.get("TERMINAL_TITLE", "Mobile Terminal")
 HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "7681"))
+# Track last user interaction per window (key: "session:window" → epoch timestamp)
+# Used instead of tmux window_activity for CC sessions (whose TUI refreshes constantly)
+_last_interaction = {}
 
 
 ANSI_RE = re.compile(
@@ -75,16 +78,21 @@ def send_keys(text: str, session=None, window=None):
     # Escape dismisses any active CC suggestion/autocomplete, C-u clears the line
     _run(["tmux", "send-keys", "-t", target, "Escape"])
     _run(["tmux", "send-keys", "-t", target, "C-u"])
-    # Always use load-buffer + paste-buffer for reliable delivery.
-    # send-keys -l is unreliable: special chars ($, \, `, ") can be interpreted by tmux,
-    # and there's no race protection between text and Enter.
-    # -p enables bracketed paste so TUI apps (CC) treat it as a single paste.
+    # Use load-buffer + paste-buffer for reliable delivery.
+    # send-keys -l is unreliable: special chars ($, \, `, ") can be interpreted by tmux.
+    # -p enables bracketed paste so TUI apps (CC) treat multiline text as a single paste.
+    # But bracketed paste can cause slash commands (/clear, /help) to be treated as
+    # pasted text rather than typed commands, so only use -p for multiline text.
     buf_name = "_mt_paste"
     r = _run(["tmux", "load-buffer", "-b", buf_name, "-"], input=text.encode())
     if r.returncode != 0:
         return  # Don't send Enter if buffer load failed
-    _run(["tmux", "paste-buffer", "-d", "-p", "-b", buf_name, "-t", target])
-    time.sleep(0.05)  # Let TUI process bracketed paste before sending Enter
+    is_multiline = "\n" in text
+    paste_cmd = ["tmux", "paste-buffer", "-d", "-b", buf_name, "-t", target]
+    if is_multiline:
+        paste_cmd.insert(3, "-p")  # Bracketed paste only for multiline
+    _run(paste_cmd)
+    time.sleep(0.05)  # Let TUI process paste before sending Enter
     _run(["tmux", "send-keys", "-t", target, "Enter"])
 
 
@@ -206,6 +214,16 @@ def get_dashboard() -> dict:
         cc = detect_cc_status(preview, activity_age=activity_age)
         # Send last 40 lines for sidebar snippet extraction
         preview_short = '\n'.join(preview.split('\n')[-40:])
+        # For CC sessions, use our tracked interaction time instead of tmux's
+        # window_activity (CC's TUI refreshes constantly, keeping it artificially recent)
+        interaction_key = f"{sname}:{widx}"
+        if cc["is_cc"]:
+            # Only show age if we've tracked an interaction from the UI
+            act_ts = int(_last_interaction[interaction_key]) if interaction_key in _last_interaction else None
+        elif activity_age is not None:
+            act_ts = int(wactivity)
+        else:
+            act_ts = None
         sessions[sname]["windows"].append({
             "index": int(widx),
             "name": wname,
@@ -218,7 +236,7 @@ def get_dashboard() -> dict:
             "cc_context_pct": cc["context_pct"],
             "cc_perm_mode": cc["perm_mode"],
             "preview": preview_short,
-            "activity_ts": int(wactivity) if activity_age is not None else None,
+            "activity_ts": act_ts,
         })
     return {"sessions": list(sessions.values())}
 
@@ -3171,6 +3189,9 @@ async def api_send(body: dict):
     window = body.get("window", None)
     if cmd:
         send_keys(cmd, session, window)
+        s = session or _current_session
+        w = window if window is not None else 0
+        _last_interaction[f"{s}:{w}"] = time.time()
     return JSONResponse({"ok": True})
 
 
@@ -3179,6 +3200,9 @@ async def api_key(key: str, session: str = None, window: int = None):
     ALLOWED = {"C-c", "C-d", "C-l", "C-z", "Up", "Down", "Left", "Right", "Tab", "Enter", "Escape"}
     if key in ALLOWED:
         send_special(key, session, window)
+        s = session or _current_session
+        w = window if window is not None else 0
+        _last_interaction[f"{s}:{w}"] = time.time()
     return JSONResponse({"ok": True})
 
 
