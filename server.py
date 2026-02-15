@@ -1395,7 +1395,7 @@ function createPane(parentEl) {
     + '</div>'
     + '<div class="pane-tray pane-tray-cmds">'
     + '<button class="pill" onclick="panePrefill(this,\\'/_my_wrap_up\\')">Wrap Up</button>'
-    + '<button class="pill" onclick="panePrefill(this,\\'clear\\')">Clear</button>'
+    + '<button class="pill" onclick="panePrefill(this,\\'/clear\\')">Clear</button>'
     + '<button class="pill" onclick="panePrefill(this,\\'/exit\\')">Exit</button>'
     + '<button class="pill" onclick="sendResumeActive()">Resume</button>'
     + '</div>'

@@ -106,7 +106,8 @@
 - **2026-02-14**: Fix Enter key across desktop and mobile — mobile Chrome fires `keydown` with `key:'Process'` instead of `'Enter'` when predictive text is active; `e.isComposing` broken on iOS Safari; `compositionstart/end` unreliable on Chrome; `beforeinput` with `insertParagraph` doesn't fire for `<textarea>`. Final solution: dual `keydown` (primary, works on desktop) + `beforeinput`/`insertLineBreak` (fallback for mobile Chrome). `shiftKey` tracked from `keydown` so Shift+Enter still inserts newlines. Also: fetch errors on `/api/send` now restore text to textarea instead of silently swallowing.
 
 ## Recently Completed (cont. 15)
-- **2026-02-15**: Fix `/clear` slash command from UI — bracketed paste (`paste-buffer -p`) wraps text in escape sequences that cause CC's TUI to treat slash commands as pasted text (processed as user message, not built-in command). Fix: only use `-p` for multiline text; single-line commands sent without bracketed paste.
+- **2026-02-15**: Fix per-pane `/clear` button — per-pane Commands tray Clear button was sending `clear` (terminal screen clear) instead of `/clear` (CC context clear). Global bar had the correct command; per-pane copy was missing the `/`. Always verify per-pane command buttons match global bar commands.
+- **2026-02-15**: Bracketed paste improvement — `send_keys()` now only uses `-p` (bracketed paste) for multiline text. Single-line text sent without bracketed paste, which is safer for slash commands.
 - **2026-02-15**: Fix activity age always "now" for CC sessions — tmux `window_activity` unreliable for CC (TUI refreshes constantly keeping timestamp ~5-7s). Added server-side `_last_interaction` dict tracking actual `/api/send` and `/api/key` calls per `session:window`. Dashboard uses tracked time for CC sessions, tmux `window_activity` for non-CC. CC sessions with no tracked interaction show no age (null) instead of bogus "now".
 
 ## Active Work
