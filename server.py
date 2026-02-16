@@ -75,14 +75,24 @@ def _tmux_target(session=None, window=None):
 
 def send_keys(text: str, session=None, window=None):
     target = _tmux_target(session, window)
+    # Slash commands (/exit, /clear, etc.) must be TYPED not pasted for CC's TUI
+    # to recognize them. send-keys -l sends literal keystrokes, which is reliable
+    # for short single-line strings. paste-buffer inserts text as a paste event,
+    # which CC treats differently (doesn't trigger slash command handling).
+    is_slash_cmd = text.startswith("/") and "\n" not in text
+    if is_slash_cmd:
+        # Skip Escape+C-u for slash commands — Escape interferes with CC's TUI state.
+        _run(["tmux", "send-keys", "-l", "-t", target, text])
+        time.sleep(0.05)
+        _run(["tmux", "send-keys", "-t", target, "Enter"])
+        return
     # Escape dismisses any active CC suggestion/autocomplete, C-u clears the line
     _run(["tmux", "send-keys", "-t", target, "Escape"])
     _run(["tmux", "send-keys", "-t", target, "C-u"])
-    # Use load-buffer + paste-buffer for reliable delivery.
-    # send-keys -l is unreliable: special chars ($, \, `, ") can be interpreted by tmux.
+    # Use load-buffer + paste-buffer for reliable delivery of normal text.
+    # send-keys -l is unreliable for large text: special chars ($, \, `, ")
+    # can be interpreted by tmux.
     # -p enables bracketed paste so TUI apps (CC) treat multiline text as a single paste.
-    # But bracketed paste can cause slash commands (/clear, /help) to be treated as
-    # pasted text rather than typed commands, so only use -p for multiline text.
     buf_name = "_mt_paste"
     r = _run(["tmux", "load-buffer", "-b", buf_name, "-"], input=text.encode())
     if r.returncode != 0:
@@ -294,9 +304,10 @@ def list_windows() -> list:
     return windows
 
 
-def new_window():
+def new_window(session=None):
+    target = session or _current_session
     work_dir = WORK_DIR if Path(WORK_DIR).is_dir() else str(Path.home())
-    _run(["tmux", "new-window", "-t", _current_session, "-c", work_dir])
+    _run(["tmux", "new-window", "-t", target, "-c", work_dir])
 
 
 def select_window(index: int):
@@ -2476,17 +2487,17 @@ async function sendToPane(paneId) {
   const ta = paneEl.querySelector('.pane-input textarea');
   if (!ta) return;
   const text = ta.value; if (!text) return;
-  ta.value = ''; ta.style.height = 'auto'; ta.style.overflowY = 'hidden';
   const tab = allTabs[pane.activeTabId];
   const state = tabStates[pane.activeTabId];
   if (!tab || !state) return;
-  state.pendingMsg = text; state.pendingTime = Date.now(); state.awaitingResponse = true;
-  // Pause queue on manual send
-  const qs = _queueStates[pane.activeTabId];
-  if (qs && qs.playing) pauseQueue(pane.activeTabId);
-  const outEl = document.getElementById('tab-output-' + pane.activeTabId);
-  if (outEl) { renderOutput(state.rawContent || state.last, outEl, state, pane.activeTabId); outEl.scrollTop = outEl.scrollHeight; }
+  ta.value = ''; ta.style.height = 'auto'; ta.style.overflowY = 'hidden';
   try {
+    state.pendingMsg = text; state.pendingTime = Date.now(); state.awaitingResponse = true;
+    // Pause queue on manual send
+    const qs = _queueStates[pane.activeTabId];
+    if (qs && qs.playing) pauseQueue(pane.activeTabId);
+    const outEl = document.getElementById('tab-output-' + pane.activeTabId);
+    if (outEl) { renderOutput(state.rawContent || state.last, outEl, state, pane.activeTabId); outEl.scrollTop = outEl.scrollHeight; }
     const resp = await fetch('/api/send', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ cmd: text, session: tab.session, window: tab.windowIndex })
@@ -2503,13 +2514,13 @@ async function sendGlobal() {
   const text = M.value; if (!text) return;
   const active = getActiveTab(); if (!active) return;
   M.value = ''; M.style.height = 'auto'; M.style.overflowY = 'hidden';
-  active.state.pendingMsg = text; active.state.pendingTime = Date.now(); active.state.awaitingResponse = true;
-  // Pause queue on manual send
-  const qsg = _queueStates[active.tabId];
-  if (qsg && qsg.playing) pauseQueue(active.tabId);
-  const outEl = document.getElementById('tab-output-' + active.tabId);
-  if (outEl) { renderOutput(active.state.rawContent || active.state.last, outEl, active.state, active.tabId); outEl.scrollTop = outEl.scrollHeight; }
   try {
+    active.state.pendingMsg = text; active.state.pendingTime = Date.now(); active.state.awaitingResponse = true;
+    // Pause queue on manual send
+    const qsg = _queueStates[active.tabId];
+    if (qsg && qsg.playing) pauseQueue(active.tabId);
+    const outEl = document.getElementById('tab-output-' + active.tabId);
+    if (outEl) { renderOutput(active.state.rawContent || active.state.last, outEl, active.state, active.tabId); outEl.scrollTop = outEl.scrollHeight; }
     const resp = await fetch('/api/send', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ cmd: text, session: active.tab.session, window: active.tab.windowIndex })
@@ -2975,12 +2986,21 @@ async function loadDashboard() {
 }
 
 async function newWin() {
-  try { await fetch('/api/windows/new', {method:'POST'}); } catch(e) { return; }
+  // Determine target session from active tab
+  let sessName = null;
+  const ap = panes.find(p => p.id === activePaneId);
+  if (ap && ap.activeTabId != null && allTabs[ap.activeTabId]) sessName = allTabs[ap.activeTabId].session;
+  if (!sessName) { for (const tid in allTabs) { sessName = allTabs[tid].session; break; } }
+  if (!sessName && _dashboardData && _dashboardData.sessions.length > 0) sessName = _dashboardData.sessions[0].name;
+  try {
+    await fetch('/api/windows/new', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ session: sessName })
+    });
+  } catch(e) { return; }
   await loadDashboard();
-  if (_dashboardData) {
-    let sessName = null;
-    for (const tid in allTabs) { sessName = allTabs[tid].session; break; }
-    if (!sessName && _dashboardData.sessions.length > 0) sessName = _dashboardData.sessions[0].name;
+  if (_dashboardData && sessName) {
     const sess = _dashboardData.sessions.find(s => s.name === sessName);
     if (sess && sess.windows.length > 0) {
       const w = sess.windows[sess.windows.length - 1];
@@ -3217,8 +3237,8 @@ async def api_windows():
 
 
 @app.post("/api/windows/new")
-async def api_new_window():
-    new_window()
+async def api_new_window(body: dict = {}):
+    new_window(session=body.get("session"))
     return JSONResponse({"ok": True})
 
 

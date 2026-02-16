@@ -110,6 +110,10 @@
 - **2026-02-15**: Bracketed paste improvement — `send_keys()` now only uses `-p` (bracketed paste) for multiline text. Single-line text sent without bracketed paste, which is safer for slash commands.
 - **2026-02-15**: Fix activity age always "now" for CC sessions — tmux `window_activity` unreliable for CC (TUI refreshes constantly keeping timestamp ~5-7s). Added server-side `_last_interaction` dict tracking actual `/api/send` and `/api/key` calls per `session:window`. Dashboard uses tracked time for CC sessions, tmux `window_activity` for non-CC. CC sessions with no tracked interaction show no age (null) instead of bogus "now".
 
+## Recently Completed (cont. 16)
+- **2026-02-15**: Fix new window creation targeting wrong session — `new_window()` always used server's `_current_session` instead of the active tab's session. Now `/api/windows/new` accepts `session` param; client passes active tab's session. Also fixed JS ReferenceError in `newWin()` (nonexistent `getActiveTabInfo()` → proper `activePaneId` lookup).
+- **2026-02-15**: Fix send losing typed text — `sendToPane()` cleared textarea before validating tab/state existed; early return lost text silently. Also, try-catch only wrapped `fetch`, not pre-fetch code (`renderOutput`, `pauseQueue`), so any thrown error lost text. Fixed both: validation before clear, entire post-clear logic in try-catch. Same fix applied to `sendGlobal()`.
+
 ## Active Work
 None
 
