@@ -573,6 +573,22 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .notepad-resize-corner::after { content:''; position:absolute; left:3px; bottom:3px;
   width:8px; height:8px; border-left:2px solid var(--border2);
   border-bottom:2px solid var(--border2); border-radius:0 0 0 2px; }
+.master-notes-panel { position:absolute; top:0; left:0; right:0; z-index:20;
+  max-width:700px; margin:0 auto; background:var(--bg2);
+  border:1px solid var(--border2); border-top:none; border-radius:0 0 12px 12px;
+  display:flex; flex-direction:column; overflow:hidden;
+  transform:translateY(-10px); opacity:0; pointer-events:none;
+  transition:transform .15s ease, opacity .15s ease; }
+.master-notes-panel.open { transform:translateY(0); opacity:1; pointer-events:auto; }
+.master-notes-panel .notepad-header span { font-size:12px; font-weight:600; color:var(--text2); }
+.master-notes-panel textarea { flex:1; background:transparent; color:var(--text);
+  border:none; padding:10px 12px; font-size:13px; font-family:inherit;
+  resize:none; outline:none; line-height:1.5; min-height:200px; }
+.master-notes-panel .notepad-resize { height:6px; cursor:ns-resize; flex-shrink:0;
+  background:transparent; position:relative; }
+.master-notes-panel .notepad-resize::after { content:''; position:absolute; left:50%; top:50%;
+  transform:translate(-50%,-50%); width:30px; height:3px; border-radius:2px;
+  background:var(--border2); }
 
 /* Queue panel */
 .pane-queue-btn { background:none; border:none; color:var(--text3);
@@ -846,6 +862,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
     <div id="topbar-row">
       <button id="hamburger" onclick="openMobileSidebar()">&#9776;</button>
       <span style="flex:1"></span>
+      <button class="topbar-btn" id="master-notes-btn" onclick="toggleMasterNotes()">Notes</button>
       <button class="topbar-btn" id="add-pane-btn" onclick="addPane()">+ Pane</button>
       <button class="topbar-btn" id="size-btn" onclick="cycleTextSize()">A</button>
       <button class="topbar-btn" id="view-btn" onclick="toggleRaw()">
@@ -854,6 +871,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
     </div>
   </div>
 
+  <div id="master-notes-container" style="position:relative"></div>
   <div id="panes-container"></div>
 
   <div id="bar">
@@ -1214,8 +1232,22 @@ function parseCCTurns(text) {
     }
     lines = lines.slice(startIdx);
   }
+  // Pre-scan: identify real user prompts (❯ followed by ⏺ before next ❯).
+  // Menu selection ❯ lines (plan approval, AskUserQuestion) have no ⏺ after them.
+  const realPrompts = new Set();
+  for (let i = 0; i < lines.length; i++) {
+    const r = lines[i].replace(/\\u00a0/g, ' ');
+    if (/^\\u276f/.test(r)) {
+      for (let j = i + 1; j < lines.length; j++) {
+        const jr = lines[j].replace(/\\u00a0/g, ' ');
+        if (/^\\u276f/.test(jr)) break;
+        if (/^\\u23fa/.test(jr.trim())) { realPrompts.add(i); break; }
+      }
+    }
+  }
   const turns = []; let cur = null, inTool = false, sawStatus = false;
-  for (const line of lines) {
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
     const raw = line.replace(/\\u00a0/g, ' ');
     const t = raw.trim();
     if (/^[\\u2500\\u2501\\u2504\\u2508\\u2550]{3,}$/.test(t) && t.length > 60) continue;
@@ -1225,12 +1257,18 @@ function parseCCTurns(text) {
     if (/^[\\u2720-\\u273f]/.test(t)) { sawStatus = true; continue; }
     if (/^\\u00b7/.test(t)) { sawStatus = true; continue; }
     if (/esc to interrupt/.test(t)) continue;
-    if (/^\\u276f/.test(raw)) {
+    if (/^\\u276f/.test(raw) && realPrompts.has(li)) {
       if (cur) turns.push(cur);
       const msg = t.replace(/^\\u276f\\s*/, '').trim();
       // Skip CC slash commands (/clear, /help, etc.) — they're meta, not conversation
       if (msg.startsWith('/')) { cur = null; inTool = false; sawStatus = false; continue; }
       cur = { role: 'user', lines: msg ? [msg] : [] }; inTool = false; sawStatus = false; continue;
+    }
+    // Non-prompt ❯ line (menu selection) — treat as regular text, strip the ❯
+    if (/^\\u276f/.test(raw) && !realPrompts.has(li)) {
+      const menuText = t.replace(/^\\u276f\\s*/, '').trim();
+      if (cur && !inTool && menuText) cur.lines.push(menuText);
+      continue;
     }
     if (/^\\u23fa/.test(t)) {
       const after = t.replace(/^\\u23fa\\s*/, '');
@@ -1870,6 +1908,58 @@ function updateNotepadContent(paneId) {
   if (key) {
     try { ta.value = prefs.getItem(key) || ''; } catch(e) { ta.value = ''; }
   } else { ta.value = ''; }
+}
+
+// === Master Notes ===
+function toggleMasterNotes() {
+  const container = document.getElementById('master-notes-container');
+  let panel = container.querySelector('.master-notes-panel');
+  const btn = document.getElementById('master-notes-btn');
+  if (panel && panel.classList.contains('open')) {
+    panel.classList.remove('open');
+    btn?.classList.remove('active');
+    return;
+  }
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.className = 'master-notes-panel';
+    panel.innerHTML = '<div class="notepad-header"><span>Master Notes</span>'
+      + '<button class="notepad-close" onclick="toggleMasterNotes()">&times;</button></div>'
+      + '<textarea placeholder="Global notes across all sessions..."></textarea>'
+      + '<div class="notepad-resize"></div>';
+    panel.querySelector('textarea').addEventListener('input', function() {
+      try { prefs.setItem('master-notepad', this.value); } catch(e) {}
+    });
+    // Resize handle (vertical only)
+    const handle = panel.querySelector('.notepad-resize');
+    let sy, sh;
+    handle.addEventListener('pointerdown', function(e) {
+      e.preventDefault();
+      sy = e.clientY; sh = panel.offsetHeight;
+      function onMove(ev) {
+        panel.style.height = Math.max(120, sh + (ev.clientY - sy)) + 'px';
+      }
+      function onUp() {
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        try { prefs.setItem('master-notepad:size', panel.style.height); } catch(e) {}
+      }
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+    });
+    // Restore saved size
+    try {
+      const saved = prefs.getItem('master-notepad:size');
+      if (saved) panel.style.height = saved;
+    } catch(e) {}
+    container.appendChild(panel);
+  }
+  // Load content
+  const ta = panel.querySelector('textarea');
+  try { ta.value = prefs.getItem('master-notepad') || ''; } catch(e) { ta.value = ''; }
+  panel.classList.add('open');
+  btn?.classList.add('active');
+  ta.focus();
 }
 
 // === Task Queue ===

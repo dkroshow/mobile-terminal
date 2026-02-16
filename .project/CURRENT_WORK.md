@@ -121,6 +121,10 @@
 - **2026-02-15**: Removed sidebar memo/notes — CSS (`.sb-memo`, `.sb-memo-edit`, `.sb-win-name-row`), JS functions (`getMemo`/`setMemo`/`startMemoEdit`), sidebar rendering, memo-edit re-render guard, and `memo:` stale cleanup all removed. Per-window notepad (NOTES button) still available.
 - **2026-02-15**: Auto-unhide session on tab focus — `focusTab()` checks if the tab's session is in hidden list and calls `unhideSession()` if so, ensuring the sidebar shows the session when a tab is clicked.
 
+## Recently Completed (cont. 18)
+- **2026-02-15**: Master Notes — global notepad accessible from topbar "Notes" button, not tied to any window/session. Panel drops down below topbar with textarea, close button, and vertical resize handle. Content persisted to `prefs master-notepad`, panel height to `prefs master-notepad:size`. Visible on both mobile and desktop.
+- **2026-02-15**: Fix plan mode text disappearing in Clean view — `parseCCTurns()` treated menu selection `❯` lines (plan approval, AskUserQuestion prompts) as user prompts, causing selected item text to either disappear (ghost-filtered) or show as wrong "You" card. Added pre-scan: only `❯` lines followed by a `⏺` response are real user prompts. Menu `❯` lines are treated as regular text in the current assistant turn (with `❯` prefix stripped).
+
 ## Active Work
 None
 
