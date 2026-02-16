@@ -1022,7 +1022,14 @@ function esc(s) { const d=document.createElement('div'); d.textContent=s; return
 function md(s) {
   if (typeof marked !== 'undefined') {
     try {
-      marked.setOptions({ breaks: false });
+      const renderer = new marked.Renderer();
+      renderer.link = function(href, title, text) {
+        const h = typeof href === 'object' ? href.href : href;
+        const t = typeof href === 'object' ? href.title : title;
+        const tx = typeof href === 'object' ? href.text : text;
+        return '<a href="' + h + '" target="_blank" rel="noopener noreferrer"' + (t ? ' title="' + t + '"' : '') + '>' + tx + '</a>';
+      };
+      marked.setOptions({ breaks: false, renderer: renderer });
       // Wrap lines with box-drawing chars in fenced code blocks
       const boxRe = /[\u2500-\u257f\u2580-\u259f]/;
       const lines = s.split('\\n');

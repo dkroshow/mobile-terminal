@@ -127,6 +127,8 @@
 
 - **2026-02-15**: Fix tab dots not updating dynamically on mobile — `updatePolling()` only polled active tab per pane; background tab dots never updated. Now `loadDashboard()` (3s interval) also updates `ccStatus` and dot class for all open tabs from dashboard data.
 
+- **2026-02-15**: Links open in new tab — custom marked.js renderer adds `target="_blank"` and `rel="noopener noreferrer"` to all `<a>` tags in Clean view markdown output.
+
 ## Active Work
 None
 
