@@ -3033,16 +3033,28 @@ async function loadDashboard() {
     const r = await fetch('/api/dashboard');
     _dashboardData = await r.json();
     renderSidebar();
-    // Update tab names
+    // Update tab names and status dots from dashboard
     for (const tid in allTabs) {
       const tab = allTabs[tid];
       const sess = _dashboardData.sessions.find(s => s.name === tab.session);
       if (sess) {
         const win = sess.windows.find(w => w.index === tab.windowIndex);
-        if (win && win.name !== tab.windowName) {
-          tab.windowName = win.name;
-          for (const p of panes) {
-            if (p.tabIds.includes(parseInt(tid))) renderPaneTabs(p.id);
+        if (win) {
+          if (win.name !== tab.windowName) {
+            tab.windowName = win.name;
+            for (const p of panes) {
+              if (p.tabIds.includes(parseInt(tid))) renderPaneTabs(p.id);
+            }
+          }
+          // Update tab dot from dashboard CC status (covers background tabs)
+          const st = tabStates[tid];
+          if (st) {
+            const newStatus = win.is_cc ? (win.cc_status || 'idle') : null;
+            if (st.ccStatus !== newStatus) {
+              st.ccStatus = newStatus;
+              const dot = document.querySelector('[data-tab-dot="' + tid + '"]');
+              if (dot) dot.className = 'pane-tab-dot ' + (newStatus || 'none');
+            }
           }
         }
       }
