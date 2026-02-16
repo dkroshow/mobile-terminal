@@ -406,7 +406,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .sb-hidden-chevron { transition:transform .15s; font-size:10px; }
 .sb-hidden-chevron.open { transform:rotate(90deg); }
 .sb-activity { font-size:var(--sb-detail); color:var(--text3); opacity:0.7; white-space:nowrap; }
-.sb-win { display:flex; align-items:center; gap:8px; padding:6px 4px;
+.sb-win { display:flex; align-items:center; gap:8px; padding:6px 4px; cursor:pointer;
   border-radius:8px; cursor:pointer; transition:all .12s;
   -webkit-user-select:none; user-select:none; }
 .sb-win:hover { background:var(--surface); }
@@ -419,7 +419,6 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .sb-win-dot.thinking { background:var(--orange); animation:pulse 1s ease-in-out infinite; }
 .sb-win-dot.none { background:var(--text3); opacity:0.3; }
 .sb-win-info { flex:1; min-width:0; }
-.sb-win-name-row { display:flex; align-items:baseline; gap:6px; min-width:0; }
 .sb-win-name { font-size:var(--sb-name); font-weight:500; color:var(--text);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:0; max-width:60%; }
 .sb-win-cwd { font-size:var(--sb-detail); color:var(--text3);
@@ -439,14 +438,6 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .sb-snippet { font-size:var(--sb-detail); color:var(--text3);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   max-width:100%; font-style:italic; }
-.sb-memo { font-size:var(--sb-detail); color:rgba(232,230,227,0.55);
-  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-  cursor:text; font-style:italic; flex:1; min-width:0; }
-.sb-memo:empty::before { content:'+ note'; color:var(--text3); opacity:0.5;
-  font-style:italic; }
-.sb-memo-edit { font-size:var(--sb-detail); color:var(--text); background:var(--surface);
-  border:1px solid var(--accent); border-radius:4px; padding:2px 4px;
-  width:100%; margin-top:2px; outline:none; font-family:inherit; }
 .sb-win-detail-btn { background:none; border:none; color:var(--text3);
   font-size:16px; cursor:pointer; padding:2px 4px; border-radius:4px;
   flex-shrink:0; opacity:0; transition:opacity .15s; line-height:1; }
@@ -535,6 +526,11 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .pane-tab:hover { color:var(--text); }
 .pane-tab.active { background:var(--bg); color:var(--text); border-bottom-color:var(--bg); }
 .pane-tab.drag-over-tab { border-color:var(--accent); }
+.pane-tab-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+.pane-tab-dot.idle { background:var(--green); }
+.pane-tab-dot.working { background:var(--orange); animation:pulse 1.5s ease-in-out infinite; }
+.pane-tab-dot.thinking { background:var(--orange); animation:pulse 1s ease-in-out infinite; }
+.pane-tab-dot.none { display:none; }
 .pane-tab-name { overflow:hidden; text-overflow:ellipsis; }
 .pane-tab-close { display:flex; align-items:center; justify-content:center;
   width:20px; height:20px; border-radius:4px; font-size:12px; line-height:1;
@@ -1086,38 +1082,6 @@ function extractSnippet(preview, isCC) {
   }
   return '';
 }
-function getMemo(session, windowIndex) {
-  return prefs.getItem('memo:' + session + ':' + windowIndex) || '';
-}
-function setMemo(session, windowIndex, text) {
-  const key = 'memo:' + session + ':' + windowIndex;
-  if (text) prefs.setItem(key, text);
-  else prefs.removeItem(key);
-}
-function startMemoEdit(el, session, windowIndex) {
-  if (el.querySelector('.sb-memo-edit')) return;
-  const current = getMemo(session, windowIndex);
-  const input = document.createElement('input');
-  input.className = 'sb-memo-edit';
-  input.value = current;
-  input.placeholder = 'Add a note...';
-  const memoEl = el;
-  memoEl.textContent = '';
-  memoEl.appendChild(input);
-  input.focus();
-  const save = () => {
-    const val = input.value.trim();
-    setMemo(session, windowIndex, val);
-    memoEl.textContent = val;
-  };
-  input.addEventListener('blur', save);
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
-    if (e.key === 'Escape') { input.value = getMemo(session, windowIndex); input.blur(); }
-    e.stopPropagation();
-  });
-  input.addEventListener('click', (e) => e.stopPropagation());
-}
 // === Hidden sessions ===
 function getHiddenSessions() {
   try { return JSON.parse(prefs.getItem('hidden-sessions') || '[]'); } catch { return []; }
@@ -1554,7 +1518,7 @@ function createTab(session, windowIndex, windowName, targetPaneId) {
     rawContent: '', last: '', rawMode: false,
     pendingMsg: null, pendingTime: 0,
     awaitingResponse: false, lastOutputChange: 0,
-    pollInterval: null,
+    pollInterval: null, ccStatus: null,
   };
   pane.tabIds.push(id);
   pane.activeTabId = id;
@@ -1620,6 +1584,9 @@ function closeTab(tabId, skipRender) {
 }
 
 function focusTab(tabId) {
+  // Unhide session if tab's session is hidden
+  const ft = allTabs[tabId];
+  if (ft && getHiddenSessions().includes(ft.session)) unhideSession(ft.session);
   // Find pane
   for (const p of panes) {
     if (p.tabIds.includes(tabId)) {
@@ -1702,9 +1669,12 @@ function renderPaneTabs(paneId) {
     const tab = allTabs[tid];
     if (!tab) continue;
     const active = tid === pane.activeTabId;
+    const st = tabStates[tid];
+    const dotClass = st && st.ccStatus ? st.ccStatus : 'none';
     html += '<div class="pane-tab' + (active ? ' active' : '') + '" draggable="true"'
       + ' data-tab-id="' + tid + '"'
       + ' onclick="focusTab(' + tid + ')">'
+      + '<span class="pane-tab-dot ' + dotClass + '" data-tab-dot="' + tid + '"></span>'
       + '<span class="pane-tab-name">' + esc(tab.windowName) + '</span>'
       + '<span class="pane-tab-close" onclick="event.stopPropagation();closeTab(' + tid + ')">&times;</span>'
       + '</div>';
@@ -2448,7 +2418,18 @@ async function pollTab(tabId) {
     // Update sidebar status on every poll (1s latency vs 3s dashboard)
     const clean = cleanTerminal(d.output);
     const live = detectCCStatus(clean);
-    if (live) updateSidebarStatus(tab.session, tab.windowIndex, live.status, live.contextPct, live.permMode);
+    if (live) {
+      updateSidebarStatus(tab.session, tab.windowIndex, live.status, live.contextPct, live.permMode);
+      if (state.ccStatus !== live.status) {
+        state.ccStatus = live.status;
+        const dot = document.querySelector('[data-tab-dot="' + tabId + '"]');
+        if (dot) dot.className = 'pane-tab-dot ' + (live.status || 'idle');
+      }
+    } else if (state.ccStatus !== null) {
+      state.ccStatus = null;
+      const dot = document.querySelector('[data-tab-dot="' + tabId + '"]');
+      if (dot) dot.className = 'pane-tab-dot none';
+    }
     if (d.output !== state.last) {
       state.lastOutputChange = Date.now();
       state.last = d.output; state.rawContent = d.output;
@@ -2670,8 +2651,6 @@ function renderSidebar() {
   const data = _dashboardData;
   if (!data) return;
   const content = document.getElementById('sidebar-content');
-  // Don't re-render while editing a memo
-  if (content.querySelector('.sb-memo-edit')) return;
   // Sort sessions by custom order
   const sessions = [...data.sessions].sort((a, b) => {
     const ia = _sidebarOrder.sessions.indexOf(a.name);
@@ -2749,16 +2728,12 @@ function renderSidebarSession(s, activeTab, isHidden) {
     const wid = esc(s.name) + ':' + w.index;
     const isActive = activeTab && activeTab.session === s.name && activeTab.windowIndex === w.index;
     const snippet = (w.is_cc && w.cc_status === 'idle') ? extractSnippet(w.preview, true) : '';
-    const memo = getMemo(s.name, w.index);
     const sEsc = esc(s.name).replace(/'/g, "\\\\'");
     const wEsc = esc(w.name).replace(/'/g, "\\\\'");
-    html += '<div class="sb-win' + (isActive ? ' active' : '') + '" draggable="true" data-session="' + esc(s.name) + '" data-widx="' + w.index + '">'
-      + '<div class="sb-win-dot ' + dotClass + '" data-wid="' + wid + '" onclick="event.stopPropagation();openTab(\\'' + sEsc + '\\',' + w.index + ',\\'' + wEsc + '\\')"></div>'
-      + '<div class="sb-win-info" onclick="openTab(\\'' + sEsc + '\\',' + w.index + ',\\'' + wEsc + '\\')">'
-      + '<div class="sb-win-name-row">'
+    html += '<div class="sb-win' + (isActive ? ' active' : '') + '" draggable="true" data-session="' + esc(s.name) + '" data-widx="' + w.index + '" onclick="openTab(\\'' + sEsc + '\\',' + w.index + ',\\'' + wEsc + '\\')">'
+      + '<div class="sb-win-dot ' + dotClass + '" data-wid="' + wid + '"></div>'
+      + '<div class="sb-win-info">'
       + '<div class="sb-win-name">' + esc(w.name) + '</div>'
-      + '<div class="sb-memo" data-wid="' + wid + '" onclick="event.stopPropagation();startMemoEdit(this,\\'' + sEsc + '\\',' + w.index + ')">' + esc(memo) + '</div>'
-      + '</div>'
       + (snippet ? '<div class="sb-snippet" title="' + esc(snippet) + '">' + esc(snippet) + '</div>' : '')
       + (_sidebarExpanded ? '<div class="sb-win-cwd">' + esc(abbreviateCwd(w.cwd)) + '</div>' : '')
       + (_sidebarExpanded && w.is_cc ? '<div class="sb-perm' + (w.cc_perm_mode && /dangerously|skip|bypass/i.test(w.cc_perm_mode) ? ' danger' : '') + '" data-wid="' + wid + '">' + (w.cc_perm_mode ? esc(w.cc_perm_mode) : '') + '</div>' : '')
@@ -3128,7 +3103,7 @@ function cleanupStaleStorage() {
   for (const s of _dashboardData.sessions) {
     for (const w of s.windows) validKeys.add(s.name + ':' + w.index);
   }
-  const prefixes = ['notepad:', 'memo:', 'queue:'];
+  const prefixes = ['notepad:', 'queue:'];
   try {
     for (const key of prefs.keys()) {
       for (const pfx of prefixes) {

@@ -113,6 +113,13 @@
 ## Recently Completed (cont. 16)
 - **2026-02-15**: Fix new window creation targeting wrong session — `new_window()` always used server's `_current_session` instead of the active tab's session. Now `/api/windows/new` accepts `session` param; client passes active tab's session. Also fixed JS ReferenceError in `newWin()` (nonexistent `getActiveTabInfo()` → proper `activePaneId` lookup).
 - **2026-02-15**: Fix send losing typed text — `sendToPane()` cleared textarea before validating tab/state existed; early return lost text silently. Also, try-catch only wrapped `fetch`, not pre-fetch code (`renderOutput`, `pauseQueue`), so any thrown error lost text. Fixed both: validation before clear, entire post-clear logic in try-catch. Same fix applied to `sendGlobal()`.
+- **2026-02-15**: Fix slash commands (/exit, /clear) not working in CC — `send_keys()` used `paste-buffer` for all text, but CC's TUI only recognizes slash commands when chars are typed (keyboard events), not pasted. Slash commands now use `send-keys -l` (literal keystrokes) and skip Escape+C-u prefix which interfered with CC's TUI state. Normal text still uses `load-buffer`+`paste-buffer`.
+
+## Recently Completed (cont. 17)
+- **2026-02-15**: Status dots on pane tabs — colored CC status dots (green idle, orange pulse working, fast pulse thinking) to the left of each tab name. `ccStatus` stored in `tabStates`, updated in-place via output poll (no full tab bar re-render). Non-CC tabs hide the dot.
+- **2026-02-15**: Sidebar click targets whole row — moved `onclick` from `.sb-win-info` to outer `.sb-win` div; clicking anywhere on a sidebar window row opens/focuses it. Added `cursor:pointer` to `.sb-win`.
+- **2026-02-15**: Removed sidebar memo/notes — CSS (`.sb-memo`, `.sb-memo-edit`, `.sb-win-name-row`), JS functions (`getMemo`/`setMemo`/`startMemoEdit`), sidebar rendering, memo-edit re-render guard, and `memo:` stale cleanup all removed. Per-window notepad (NOTES button) still available.
+- **2026-02-15**: Auto-unhide session on tab focus — `focusTab()` checks if the tab's session is in hidden list and calls `unhideSession()` if so, ensuring the sidebar shows the session when a tab is clicked.
 
 ## Active Work
 None
