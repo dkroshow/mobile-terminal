@@ -129,6 +129,10 @@
 
 - **2026-02-15**: Links open in new tab — custom marked.js renderer adds `target="_blank"` and `rel="noopener noreferrer"` to all `<a>` tags in Clean view markdown output.
 
+## Recently Completed (cont. 19)
+- **2026-02-16**: Notifications when CC finishes — Two paths: (1) client-initiated via `renderOutput()` working→idle transition → browser Notification (when tab hidden) + POST `/api/notify` → macOS osascript + ntfy.sh; (2) server background monitor (`_notification_monitor()` async task, 5s poll) for tab-closed scenarios. `/api/send` registers `_notify_pending` entries; `/api/notify` removes them (prevents double-fire). 10s dedup window per `session:window`. `NTFY_TOPIC` env var enables ntfy.sh push. `windowName` added to all send bodies.
+- **2026-02-16**: Raw view darker background — `.pane-output.raw` background changed from default `--bg` (#191a1b) to #111112.
+
 ## Active Work
 None
 

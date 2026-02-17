@@ -7,6 +7,8 @@ import shutil
 import subprocess
 import sys
 import time
+import asyncio
+import urllib.request
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -23,6 +25,9 @@ PORT = int(os.environ.get("PORT", "7681"))
 # Track last user interaction per window (key: "session:window" → epoch timestamp)
 # Used instead of tmux window_activity for CC sessions (whose TUI refreshes constantly)
 _last_interaction = {}
+NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
+_notify_pending = {}   # "session:window" → {"window_name": str, "saw_busy": False}
+_notify_sent = {}      # "session:window" → epoch (dedup window)
 
 
 ANSI_RE = re.compile(
@@ -312,6 +317,65 @@ def new_window(session=None):
 
 def select_window(index: int):
     _run(["tmux", "select-window", "-t", f"{_current_session}:{index}"])
+
+
+def _send_notification(title: str, body: str, key: str = None):
+    """Send macOS + ntfy notification with 10s dedup per key."""
+    now = time.time()
+    if key:
+        last = _notify_sent.get(key, 0)
+        if now - last < 10:
+            return
+        _notify_sent[key] = now
+    # macOS notification
+    _run(["osascript", "-e",
+          f'display notification "{body}" with title "{title}"'],
+         timeout=3)
+    # ntfy.sh push
+    if NTFY_TOPIC:
+        try:
+            req = urllib.request.Request(
+                f"https://ntfy.sh/{NTFY_TOPIC}",
+                data=body.encode(),
+                headers={"Title": title},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=5)
+        except Exception:
+            pass
+
+
+async def _notification_monitor():
+    """Background task: poll CC status for pending notifications."""
+    while True:
+        await asyncio.sleep(5)
+        keys = list(_notify_pending.keys())
+        for key in keys:
+            entry = _notify_pending.get(key)
+            if not entry:
+                continue
+            try:
+                session, window = key.rsplit(":", 1)
+                window = int(window)
+                preview = get_pane_preview(session, window, lines=20)
+                cc = detect_cc_status(preview)
+                if not cc["is_cc"]:
+                    _notify_pending.pop(key, None)
+                    continue
+                if cc["status"] in ("working", "thinking"):
+                    entry["saw_busy"] = True
+                elif entry["saw_busy"]:
+                    # Was busy, now idle → notify
+                    name = entry["window_name"] or key
+                    _send_notification("Claude Code done", f"{name} finished", key)
+                    _notify_pending.pop(key, None)
+            except Exception:
+                _notify_pending.pop(key, None)
+
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(_notification_monitor())
 
 
 HTML = """\
@@ -662,7 +726,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 
 /* Pane output */
 .pane-output { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; }
-.pane-output.raw { padding:16px 14px;
+.pane-output.raw { padding:16px 14px; background:#111112;
   font-family:'SF Mono',ui-monospace,Menlo,Consolas,monospace;
   font-size:var(--mono-size); line-height:1.6; white-space:pre-wrap;
   word-break:break-word; color:#999; }
@@ -1356,6 +1420,7 @@ function renderOutput(raw, targetEl, state, tabId) {
     }
     if (wasAwaiting && !state.awaitingResponse && tabId) {
       onQueueTaskCompleted(tabId);
+      notifyDone(tabId);
     }
     let lastRole = '';
     for (const t of turns) {
@@ -2378,12 +2443,29 @@ async function tryDispatchNext(tabId) {
   try {
     await fetch('/api/send', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ cmd: text, session: tab.session, window: tab.windowIndex })
+      body: JSON.stringify({ cmd: text, session: tab.session, window: tab.windowIndex, windowName: tab.windowName || '' })
     });
   } catch(e) { pauseQueue(tabId); }
   for (const p of panes) {
     if (p.activeTabId === tabId) { renderQueuePanel(p.id); break; }
+
   }
+}
+
+function notifyDone(tabId) {
+  const tab = openTabs.find(t => t.tabId === tabId);
+  if (!tab) return;
+  // Browser notification (desktop, when tab not visible)
+  if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && document.hidden) {
+    try { new Notification('Claude Code done', { body: (tab.windowName || tab.tabId) + ' finished' }); } catch(e) {}
+  }
+  // Server notification (macOS osascript + ntfy)
+  try {
+    fetch('/api/notify', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ session: tab.session, window: tab.windowIndex, windowName: tab.windowName || '' })
+    });
+  } catch(e) {}
 }
 
 function onQueueTaskCompleted(tabId) {
@@ -2578,7 +2660,7 @@ async function sendToPane(paneId) {
     if (outEl) { renderOutput(state.rawContent || state.last, outEl, state, pane.activeTabId); outEl.scrollTop = outEl.scrollHeight; }
     const resp = await fetch('/api/send', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ cmd: text, session: tab.session, window: tab.windowIndex })
+      body: JSON.stringify({ cmd: text, session: tab.session, window: tab.windowIndex, windowName: tab.windowName || '' })
     });
     if (!resp.ok) throw new Error('send failed');
   } catch(e) {
@@ -2601,7 +2683,7 @@ async function sendGlobal() {
     if (outEl) { renderOutput(active.state.rawContent || active.state.last, outEl, active.state, active.tabId); outEl.scrollTop = outEl.scrollHeight; }
     const resp = await fetch('/api/send', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ cmd: text, session: active.tab.session, window: active.tab.windowIndex })
+      body: JSON.stringify({ cmd: text, session: active.tab.session, window: active.tab.windowIndex, windowName: active.tab.windowName || '' })
     });
     if (!resp.ok) throw new Error('send failed');
   } catch(e) {
@@ -2625,7 +2707,7 @@ async function sendResumeActive() {
   try {
     await fetch('/api/send', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ cmd: '/resume', session: active.tab.session, window: active.tab.windowIndex })
+      body: JSON.stringify({ cmd: '/resume', session: active.tab.session, window: active.tab.windowIndex, windowName: active.tab.windowName || '' })
     });
   } catch(e) {}
 }
@@ -3236,6 +3318,9 @@ function cleanupStaleStorage() {
 
 async function init() {
   await prefs.load();
+  if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
   // Restore deferred prefs
   _sidebarExpanded = prefs.getItem('sidebar:expanded') === 'true';
   if (_sidebarExpanded) document.getElementById('sb-expand-btn').innerHTML = '&#9662;';
@@ -3291,11 +3376,14 @@ async def api_send(body: dict):
     cmd = body.get("cmd", "")
     session = body.get("session", None)
     window = body.get("window", None)
+    window_name = body.get("windowName", "")
     if cmd:
         send_keys(cmd, session, window)
         s = session or _current_session
         w = window if window is not None else 0
-        _last_interaction[f"{s}:{w}"] = time.time()
+        key = f"{s}:{w}"
+        _last_interaction[key] = time.time()
+        _notify_pending[key] = {"window_name": window_name, "saw_busy": False}
     return JSONResponse({"ok": True})
 
 
@@ -3313,6 +3401,18 @@ async def api_key(key: str, session: str = None, window: int = None):
 @app.get("/api/dashboard")
 async def api_dashboard():
     return JSONResponse(get_dashboard())
+
+
+@app.post("/api/notify")
+async def api_notify(body: dict):
+    session = body.get("session", "")
+    window = body.get("window", 0)
+    window_name = body.get("windowName", "")
+    key = f"{session}:{window}"
+    # Remove from pending so background monitor won't double-fire
+    _notify_pending.pop(key, None)
+    _send_notification("Claude Code done", f"{window_name or key} finished", key)
+    return JSONResponse({"ok": True})
 
 
 @app.get("/api/windows")
