@@ -345,32 +345,38 @@ def _send_notification(title: str, body: str, key: str = None):
             pass
 
 
+def _check_pending_notifications():
+    """Synchronous work for notification monitor — runs in thread."""
+    keys = list(_notify_pending.keys())
+    for key in keys:
+        entry = _notify_pending.get(key)
+        if not entry:
+            continue
+        try:
+            session, window = key.rsplit(":", 1)
+            window = int(window)
+            preview = get_pane_preview(session, window, lines=20)
+            cc = detect_cc_status(preview)
+            if not cc["is_cc"]:
+                _notify_pending.pop(key, None)
+                continue
+            if cc["status"] in ("working", "thinking"):
+                entry["saw_busy"] = True
+            elif entry["saw_busy"]:
+                name = entry["window_name"] or key
+                _send_notification("Claude Code done", f"{name} finished", key)
+                _notify_pending.pop(key, None)
+        except Exception:
+            _notify_pending.pop(key, None)
+
+
 async def _notification_monitor():
     """Background task: poll CC status for pending notifications."""
+    loop = asyncio.get_running_loop()
     while True:
         await asyncio.sleep(5)
-        keys = list(_notify_pending.keys())
-        for key in keys:
-            entry = _notify_pending.get(key)
-            if not entry:
-                continue
-            try:
-                session, window = key.rsplit(":", 1)
-                window = int(window)
-                preview = get_pane_preview(session, window, lines=20)
-                cc = detect_cc_status(preview)
-                if not cc["is_cc"]:
-                    _notify_pending.pop(key, None)
-                    continue
-                if cc["status"] in ("working", "thinking"):
-                    entry["saw_busy"] = True
-                elif entry["saw_busy"]:
-                    # Was busy, now idle → notify
-                    name = entry["window_name"] or key
-                    _send_notification("Claude Code done", f"{name} finished", key)
-                    _notify_pending.pop(key, None)
-            except Exception:
-                _notify_pending.pop(key, None)
+        if _notify_pending:
+            await loop.run_in_executor(None, _check_pending_notifications)
 
 
 @app.on_event("startup")
@@ -3411,7 +3417,9 @@ async def api_notify(body: dict):
     key = f"{session}:{window}"
     # Remove from pending so background monitor won't double-fire
     _notify_pending.pop(key, None)
-    _send_notification("Claude Code done", f"{window_name or key} finished", key)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(
+        None, _send_notification, "Claude Code done", f"{window_name or key} finished", key)
     return JSONResponse({"ok": True})
 
 
