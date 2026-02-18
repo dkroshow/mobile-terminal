@@ -133,6 +133,7 @@
 - **2026-02-16**: Notifications when CC finishes — Two paths: (1) client-initiated via `renderOutput()` working→idle transition → browser Notification (when tab hidden) + POST `/api/notify` → macOS osascript + ntfy.sh; (2) server background monitor (`_notification_monitor()` async task, 5s poll) for tab-closed scenarios. `/api/send` registers `_notify_pending` entries; `/api/notify` removes them (prevents double-fire). 10s dedup window per `session:window`. `NTFY_TOPIC` env var enables ntfy.sh push. `windowName` added to all send bodies.
 - **2026-02-16**: Raw view darker background — `.pane-output.raw` background changed from default `--bg` (#191a1b) to #111112.
 - **2026-02-16**: Fix notification monitor async — extracted sync subprocess work into `_check_pending_notifications()` run via `run_in_executor` (prevents event loop blocking). `/api/notify` also uses executor. `get_event_loop()` → `get_running_loop()` (fixes deprecation warnings).
+- **2026-02-16**: Fix tab drag reorder — insertion line indicator (3px accent `::before`/`::after` pseudo-elements) replaces whole-tab highlight; `stopPropagation()` on tab `dragover` prevents pane-level outline; `parseInt()` on `srcTabId`/`dstTabId` fixes type mismatch (tabIds are numbers, dataset returns strings).
 
 ## Active Work
 None

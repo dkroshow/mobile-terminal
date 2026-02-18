@@ -595,7 +595,10 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   -webkit-user-select:none; user-select:none; }
 .pane-tab:hover { color:var(--text); }
 .pane-tab.active { background:var(--bg); color:var(--text); border-bottom-color:var(--bg); }
-.pane-tab.drag-over-tab { border-color:var(--accent); }
+.pane-tab.drag-over-left { position:relative; }
+.pane-tab.drag-over-left::before { content:''; position:absolute; left:-2px; top:0; bottom:0; width:3px; background:var(--accent); border-radius:2px; z-index:1; }
+.pane-tab.drag-over-right { position:relative; }
+.pane-tab.drag-over-right::after { content:''; position:absolute; right:-2px; top:0; bottom:0; width:3px; background:var(--accent); border-radius:2px; z-index:1; }
 .pane-tab-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
 .pane-tab-dot.idle { background:var(--green); }
 .pane-tab-dot.working { background:var(--orange); animation:pulse 1.5s ease-in-out infinite; }
@@ -1817,26 +1820,34 @@ function renderPaneTabs(paneId) {
       e.dataTransfer.effectAllowed = 'move';
       tab.style.opacity = '0.5';
     });
-    tab.addEventListener('dragend', () => { tab.style.opacity = ''; });
+    tab.addEventListener('dragend', () => {
+      tab.style.opacity = '';
+      tabBar.querySelectorAll('.drag-over-left,.drag-over-right').forEach(t => { t.classList.remove('drag-over-left','drag-over-right'); });
+    });
     tab.addEventListener('dragover', e => {
       e.preventDefault();
+      e.stopPropagation();
       e.dataTransfer.dropEffect = 'move';
-      tabBar.querySelectorAll('.pane-tab.drag-over-tab').forEach(t => t.classList.remove('drag-over-tab'));
-      tab.classList.add('drag-over-tab');
+      tabBar.querySelectorAll('.drag-over-left,.drag-over-right').forEach(t => { t.classList.remove('drag-over-left','drag-over-right'); });
+      const rect = tab.getBoundingClientRect();
+      const onLeft = e.clientX < rect.left + rect.width / 2;
+      tab.classList.add(onLeft ? 'drag-over-left' : 'drag-over-right');
     });
-    tab.addEventListener('dragleave', () => { tab.classList.remove('drag-over-tab'); });
+    tab.addEventListener('dragleave', () => { tab.classList.remove('drag-over-left','drag-over-right'); });
     tab.addEventListener('drop', e => {
       e.preventDefault();
       e.stopPropagation();
-      tab.classList.remove('drag-over-tab');
-      const srcTabId = e.dataTransfer.getData('text/plain');
-      const dstTabId = tab.dataset.tabId;
+      const onLeft = tab.classList.contains('drag-over-left');
+      tab.classList.remove('drag-over-left','drag-over-right');
+      const srcTabId = parseInt(e.dataTransfer.getData('text/plain'));
+      const dstTabId = parseInt(tab.dataset.tabId);
       if (srcTabId === dstTabId) return;
       const pane = panes.find(p => p.tabIds.includes(srcTabId) && p.tabIds.includes(dstTabId));
       if (!pane) return; // cross-pane drops handled by pane-level handler
       const srcIdx = pane.tabIds.indexOf(srcTabId);
-      const dstIdx = pane.tabIds.indexOf(dstTabId);
       pane.tabIds.splice(srcIdx, 1);
+      let dstIdx = pane.tabIds.indexOf(dstTabId);
+      if (!onLeft) dstIdx += 1;
       pane.tabIds.splice(dstIdx, 0, srcTabId);
       renderPaneTabs(pane.id);
       saveLayout();
