@@ -1273,8 +1273,16 @@ function updateSidebarStatus(session, windowIndex, ccStatus, contextPct, permMod
 // === Clean/parse (unchanged core logic) ===
 function cleanTerminal(raw) {
   let lines = raw.split('\\n');
-  lines = lines.filter(l => !/^\\s*[\\u256d\\u2570][\\u2500\\u2504\\u2501]+[\\u256e\\u256f]\\s*$/.test(l));
+  // Remove box-drawing border lines: ╭───╮, ╰───╯, ├───┤
+  lines = lines.filter(l => !/^\\s*[\\u256d\\u2570\\u251c][\\u2500\\u2504\\u2501]+[\\u256e\\u256f\\u2524]\\s*$/.test(l));
+  // Strip │ borders from line start/end
   lines = lines.map(l => l.replace(/^\\s*\\u2502\\s?/, '').replace(/\\s?\\u2502\\s*$/, ''));
+  // Remove TUI divider lines: pure box-drawing or labeled dividers (── label ──)
+  lines = lines.filter(l => {
+    const t = l.trim(); if (!t) return true;
+    const bc = (t.match(/[\\u2500-\\u257f]/g) || []).length;
+    return !(bc > 20 && bc > t.length * 0.6);
+  });
   let text = lines.join('\\n');
   text = text.replace(/[\\u280b\\u2819\\u2839\\u2838\\u283c\\u2834\\u2826\\u2827\\u2807\\u280f]/g, '');
   text = text.replace(/\\n{3,}/g, '\\n\\n');
@@ -1330,7 +1338,7 @@ function parseCCTurns(text) {
     const line = lines[li];
     const raw = line.replace(/\\u00a0/g, ' ');
     const t = raw.trim();
-    if (/^[\\u2500\\u2501\\u2504\\u2508\\u2550]{3,}$/.test(t) && t.length > 60) continue;
+    if (/^[\\u2500-\\u257f]{3,}$/.test(t) && t.length > 20) continue;
     if (/^[\\u23f5]/.test(t)) continue;
     if (/^\\u2026/.test(t)) continue;
     if (!t) { if (cur && cur.role === 'assistant' && !inTool) cur.lines.push(''); continue; }
@@ -1386,13 +1394,21 @@ function stripSuggestion(raw) {
   if (!/\\u276f/.test(raw) || !/\\u23fa/.test(raw)) return raw;
   const clean = cleanTerminal(raw);
   if (!isIdle(clean)) return raw;
-  // Find the last ❯ prompt line and strip ghost suggestion text after it
+  // Find the prompt ❯ line (near column 0) and strip ghost suggestion text.
+  // Skip indented ❯ lines (AskUserQuestion/plan options) — only strip prompt.
   const lines = raw.split('\\n');
-  for (let i = lines.length - 1; i >= 0; i--) {
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 10); i--) {
     const s = lines[i].replace(/\\u00a0/g, ' ');
     if (/\\u276f/.test(s)) {
-      lines[i] = lines[i].replace(/(\\u276f)\\s*.*/, '$1');
-      break;
+      // Check how many chars before ❯ (after removing │ borders)
+      const col = s.indexOf('\\u276f');
+      const before = s.substring(0, col).replace(/\\u2502/g, '');
+      if (before.length <= 1) {
+        // Prompt ❯ (at/near column 0): strip ghost text
+        lines[i] = lines[i].replace(/(\\u276f)\\s*.*/, '$1');
+        break;
+      }
+      // Indented ❯ (option line): skip, keep searching for prompt
     }
   }
   return lines.join('\\n');
