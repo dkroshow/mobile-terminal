@@ -135,6 +135,12 @@
 - **2026-02-16**: Fix notification monitor async — extracted sync subprocess work into `_check_pending_notifications()` run via `run_in_executor` (prevents event loop blocking). `/api/notify` also uses executor. `get_event_loop()` → `get_running_loop()` (fixes deprecation warnings).
 - **2026-02-16**: Fix tab drag reorder — insertion line indicator (3px accent `::before`/`::after` pseudo-elements) replaces whole-tab highlight; `stopPropagation()` on tab `dragover` prevents pane-level outline; `parseInt()` on `srcTabId`/`dstTabId` fixes type mismatch (tabIds are numbers, dataset returns strings).
 
+## Recently Completed (cont. 20)
+- **2026-02-21**: Fix AskUserQuestion/plan option text invisible on caret line — three fixes:
+  - `stripSuggestion` was stripping selected option text (indented `❯`) instead of only the prompt `❯` ghost text. Now checks chars before `❯` (after removing `│` borders) — only strips near column 0 (prompt), skips indented options. Limited to last 10 lines.
+  - `cleanTerminal` expanded to filter `├───┤` dividers (added `├`/`┤` to border filter), plus general filter removing lines where >60% chars are box-drawing with >20 box-drawing chars total (catches labeled dividers like `── memory ──`).
+  - `parseCCTurns` box-drawing filter expanded from specific chars (`─━┄┈═`) to full range `[\u2500-\u257f]` with lower threshold (20 instead of 60).
+
 ## Active Work
 None
 
