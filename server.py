@@ -73,8 +73,8 @@ def strip_ghost_text(text: str) -> str:
     # Remove dim/faint spans (ghost suggestion text after cursor)
     # Pattern: \e[0;2m...text...\e[0m  or  \e[2m...text...\e[0m
     text = re.sub(r'\x1b\[0?;?2m[^\x1b]*', '', text)
-    # Remove reverse-video cursor char — keep the char itself since it's real typed text
-    text = REVERSE_CHAR_RE.sub(r'\1', text)
+    # Remove reverse-video cursor char — it's the first char of the ghost suggestion
+    text = REVERSE_CHAR_RE.sub('', text)
     return text
 
 
