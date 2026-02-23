@@ -909,6 +909,122 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .wd-btns button { flex:1; padding:9px; border:none; border-radius:8px;
   font-size:13px; font-weight:500; font-family:inherit; cursor:pointer; }
 .wd-btn-dismiss { background:var(--surface); color:var(--text2); }
+
+/* Sidebar view tabs (Sessions / Files) */
+#sb-view-tabs { display:flex; gap:0; flex-shrink:0; margin:0 10px 6px; border-radius:8px;
+  background:var(--surface); padding:2px; }
+.sb-view-tab { flex:1; padding:5px 8px; background:none; border:none; color:var(--text3);
+  font-size:12px; font-weight:600; font-family:inherit; cursor:pointer;
+  border-radius:6px; transition:all .15s; text-transform:uppercase; letter-spacing:0.3px; }
+.sb-view-tab.active { background:var(--bg); color:var(--text); }
+#sidebar.files-view .sb-action-sessions { display:none; }
+
+/* File tree in sidebar (VS Code compact style) */
+.ft-tree { list-style:none; margin:0; padding:0; }
+.ft-node { list-style:none; }
+.ft-row { display:flex; align-items:center; gap:4px; padding:1px 6px;
+  cursor:pointer; -webkit-tap-highlight-color:transparent;
+  white-space:nowrap; overflow:hidden; height:22px; }
+.ft-row:hover { background:rgba(255,255,255,0.05); }
+.ft-row:active { background:rgba(255,255,255,0.08); }
+.ft-chevron { width:16px; font-size:10px; color:var(--text3); flex-shrink:0;
+  text-align:center; display:inline-flex; align-items:center; justify-content:center; }
+.ft-icon { font-size:14px; flex-shrink:0; width:16px; text-align:center; opacity:0.7; }
+.ft-name { font-size:13px; color:var(--text); overflow:hidden;
+  text-overflow:ellipsis; flex:1; line-height:22px; }
+.ft-name-dir { color:var(--text); }
+.ft-name-md { color:#519aba; }
+.ft-name-bin { color:var(--text3); opacity:0.5; }
+.ft-row.ft-binary { cursor:default; opacity:0.4; }
+.ft-row.ft-binary:hover { background:none; }
+.ft-root-label { font-size:11px; font-weight:600; color:var(--text3); text-transform:uppercase;
+  letter-spacing:0.3px; margin-top:6px; padding:4px 6px 2px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ft-root-label:first-child { margin-top:0; }
+.ft-empty { padding:24px 12px; text-align:center; color:var(--text3); font-size:13px; }
+.ft-loading { color:var(--text3); font-size:12px; padding:2px 6px; padding-left:36px; height:22px;
+  line-height:22px; }
+.ft-children { list-style:none; margin:0; padding:0; }
+
+/* Raw markdown syntax highlighting */
+.md-raw { margin:0; padding:12px 16px; color:var(--text); font-size:var(--mono-size);
+  font-family:'SF Mono',ui-monospace,Menlo,monospace; white-space:pre-wrap;
+  word-break:break-word; line-height:1.5; counter-reset:line; }
+.md-raw .md-h { color:#569cd6; font-weight:bold; }
+.md-raw .md-hm { color:#569cd6; opacity:0.6; }
+.md-raw .md-bold { color:#ce9178; font-weight:bold; }
+.md-raw .md-bm { color:#ce9178; opacity:0.5; }
+.md-raw .md-italic { color:#c586c0; font-style:italic; }
+.md-raw .md-im { color:#c586c0; opacity:0.5; }
+.md-raw .md-code { color:#4ec9b0; background:rgba(78,201,176,0.08);
+  padding:1px 3px; border-radius:3px; }
+.md-raw .md-cm { color:#4ec9b0; opacity:0.4; }
+.md-raw .md-fence { color:#808080; }
+.md-raw .md-fenced { color:#d4d4d4; background:rgba(255,255,255,0.03);
+  display:inline; }
+.md-raw .md-link-text { color:#569cd6; }
+.md-raw .md-link-url { color:#808080; }
+.md-raw .md-link-bracket { color:#569cd6; opacity:0.5; }
+.md-raw .md-bullet { color:#d7ba7d; }
+.md-raw .md-blockquote { color:#608b4e; }
+.md-raw .md-pipe { color:#808080; }
+.md-raw .md-hr { color:#808080; }
+
+/* Code file syntax highlighting */
+.code-view { margin:0; padding:12px 16px; color:#d4d4d4; font-size:var(--mono-size);
+  font-family:'SF Mono',ui-monospace,Menlo,monospace; white-space:pre-wrap;
+  word-break:break-word; line-height:1.5; }
+.code-view .code-kw { color:#569cd6; }
+.code-view .code-builtin { color:#4ec9b0; }
+.code-view .code-string { color:#ce9178; }
+.code-view .code-comment { color:#6a9955; font-style:italic; }
+.code-view .code-num { color:#b5cea8; }
+.code-view .code-decorator { color:#d7ba7d; }
+
+/* File tab toolbar */
+.file-tab-toolbar { display:flex; align-items:center; gap:8px; padding:8px 12px;
+  border-bottom:1px solid var(--border); background:var(--bg2); flex-shrink:0; }
+.file-tab-path { flex:1; font-size:11px; color:var(--text3); overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; font-family:'SF Mono',ui-monospace,Menlo,monospace; }
+.file-tab-toggle { display:flex; gap:0; background:var(--surface); border-radius:6px; padding:2px; }
+.file-tab-toggle button { padding:3px 10px; background:none; border:none; color:var(--text3);
+  font-size:11px; font-weight:600; font-family:inherit; cursor:pointer;
+  border-radius:4px; transition:all .15s; }
+.file-tab-toggle button.active { background:var(--bg); color:var(--text); }
+.pane-tab.file-tab .pane-tab-name { font-style:italic; }
+.pane-tab.file-tab .pane-tab-dot { background:var(--text3); opacity:0.3; }
+
+/* File tab hides input bar */
+.pane.file-tab-active .pane-input { display:none; }
+
+/* File browser markdown reader */
+.fb-reader { max-width:700px; margin:0 auto; padding:16px 20px 40px; }
+.fb-reader-title { font-size:15px; font-weight:600; color:var(--text3);
+  margin-bottom:16px; padding-bottom:10px; border-bottom:1px solid var(--border); }
+.fb-reader-body { color:var(--text); font-size:var(--fs-text); line-height:1.65; }
+.fb-reader-body h1,.fb-reader-body h2,.fb-reader-body h3,
+.fb-reader-body h4,.fb-reader-body h5,.fb-reader-body h6 {
+  color:var(--text); margin:1.2em 0 0.5em; font-weight:600; }
+.fb-reader-body h1 { font-size:1.5em; } .fb-reader-body h2 { font-size:1.3em; }
+.fb-reader-body h3 { font-size:1.15em; }
+.fb-reader-body p { margin:0.6em 0; }
+.fb-reader-body code { background:var(--surface); padding:2px 5px;
+  border-radius:4px; font-size:0.9em; font-family:'SF Mono',ui-monospace,Menlo,monospace; }
+.fb-reader-body pre { background:var(--surface); padding:12px 14px;
+  border-radius:8px; overflow-x:auto; margin:0.8em 0; }
+.fb-reader-body pre code { background:none; padding:0; font-size:0.85em; }
+.fb-reader-body blockquote { border-left:3px solid var(--accent); margin:0.8em 0;
+  padding:4px 14px; color:var(--text2); }
+.fb-reader-body ul,.fb-reader-body ol { padding-left:1.5em; margin:0.5em 0; }
+.fb-reader-body li { margin:0.3em 0; }
+.fb-reader-body a { color:var(--accent); text-decoration:none; }
+.fb-reader-body a:hover { text-decoration:underline; }
+.fb-reader-body table { border-collapse:collapse; width:100%; margin:0.8em 0; }
+.fb-reader-body th,.fb-reader-body td { border:1px solid var(--border2);
+  padding:6px 10px; font-size:13px; text-align:left; }
+.fb-reader-body th { background:var(--surface); font-weight:600; }
+.fb-reader-body img { max-width:100%; border-radius:8px; }
+.fb-reader-body hr { border:none; border-top:1px solid var(--border); margin:1.5em 0; }
 </style>
 </head>
 <body>
@@ -916,13 +1032,16 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 <div id="app">
 <aside id="sidebar">
   <div id="sidebar-header">
-    <h2>Sessions</h2>
-    <button id="sb-new-win-btn" onclick="newWin()" title="New window">+</button>
-    <button id="sb-expand-btn" onclick="toggleSidebarExpand()" title="Toggle detail level">&#9656;</button>
+    <div id="sb-view-tabs">
+      <button class="sb-view-tab active" data-view="sessions" onclick="switchSidebarView('sessions')">Sessions</button>
+      <button class="sb-view-tab" data-view="files" onclick="switchSidebarView('files')">Files</button>
+    </div>
+    <button id="sb-new-win-btn" class="sb-action-sessions" onclick="newWin()" title="New window">+</button>
+    <button id="sb-expand-btn" class="sb-action-sessions" onclick="toggleSidebarExpand()" title="Toggle detail level">&#9656;</button>
     <button id="collapse-btn" onclick="toggleSidebar()" title="Collapse sidebar">&laquo;</button>
   </div>
   <div id="sidebar-content"></div>
-  <div id="sidebar-footer">
+  <div id="sidebar-footer" class="sb-action-sessions">
     <button id="new-win-btn" onclick="newWin()">+ New Window</button>
   </div>
 </aside>
@@ -1084,6 +1203,9 @@ let _sidebarCollapsed = false;
 let _sidebarExpanded = false;
 let _wdSession = null, _wdWindow = null; // window details modal context
 let _queueStates = {}; // tabId -> { items: [{text, done}], playing: false, currentIdx: null, idleTimer: null }
+let _sidebarView = 'sessions'; // 'sessions' | 'files'
+let _ftTreeCache = {}; // path -> {items, expanded}
+let _ftExpanded = {}; // path -> true
 
 const M = document.getElementById('msg');
 const bar = document.getElementById('bar');
@@ -1137,6 +1259,402 @@ function abbreviateCwd(cwd) {
   if (parts.length <= 2) return p;
   return parts.slice(-2).join('/');
 }
+
+// === File Browser (sidebar-integrated) ===
+function mdFile(s) {
+  if (typeof marked !== 'undefined') {
+    try {
+      const renderer = new marked.Renderer();
+      renderer.link = function(href, title, text) {
+        const h = typeof href === 'object' ? href.href : href;
+        const t = typeof href === 'object' ? href.title : title;
+        const tx = typeof href === 'object' ? href.text : text;
+        return '<a href="' + h + '" target="_blank" rel="noopener noreferrer"' + (t ? ' title="' + t + '"' : '') + '>' + tx + '</a>';
+      };
+      marked.setOptions({ breaks: false, renderer: renderer });
+      return marked.parse(s);
+    } catch(e) {}
+  }
+  return '<pre>' + s.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</pre>';
+}
+
+function switchSidebarView(view) {
+  if (_sidebarView === view) return;
+  _sidebarView = view;
+  document.querySelectorAll('.sb-view-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.view === view);
+  });
+  document.getElementById('sidebar').classList.toggle('files-view', view === 'files');
+  if (view === 'files') {
+    renderFileTree();
+  } else {
+    renderSidebar();
+  }
+}
+
+function updateFileTreeRoots() {
+  // Gather unique cwds from dashboard data for root nodes
+  const cwds = new Set();
+  if (_dashboardData) {
+    for (const s of _dashboardData.sessions) {
+      for (const w of s.windows) { if (w.cwd) cwds.add(w.cwd); }
+    }
+  }
+  return [...cwds].sort();
+}
+
+function renderFileTree() {
+  const content = document.getElementById('sidebar-content');
+  const roots = updateFileTreeRoots();
+  if (roots.length === 0) {
+    content.innerHTML = '<div class="ft-empty">No active sessions found</div>';
+    content._lastHTML = null;
+    return;
+  }
+  let html = '';
+  for (const root of roots) {
+    html += '<div class="ft-root-label" title="' + esc(root) + '">' + esc(abbreviateCwd(root)) + '</div>';
+    html += '<ul class="ft-tree">';
+    html += renderFtNode(root, root.split('/').filter(Boolean).pop() || root, 0, true, root);
+    html += '</ul>';
+  }
+  content.innerHTML = html;
+  content._lastHTML = null;
+}
+
+function ftFileIcon(name) {
+  const ext = name.lastIndexOf('.') >= 0 ? name.substring(name.lastIndexOf('.') + 1).toLowerCase() : '';
+  // VS Code-like file type colors
+  if (ext === 'md') return '<span class="ft-icon" style="color:#519aba">M</span>';
+  if (ext === 'py') return '<span class="ft-icon" style="color:#4584b6">\\u03c0</span>';
+  if (ext === 'js') return '<span class="ft-icon" style="color:#e8d44d">J</span>';
+  if (ext === 'ts' || ext === 'tsx') return '<span class="ft-icon" style="color:#3178c6">T</span>';
+  if (ext === 'json') return '<span class="ft-icon" style="color:#cbcb41">{}</span>';
+  if (ext === 'toml' || ext === 'yml' || ext === 'yaml') return '<span class="ft-icon" style="color:#6d8086">\\u2699</span>';
+  if (ext === 'html') return '<span class="ft-icon" style="color:#e44d26">&lt;&gt;</span>';
+  if (ext === 'css') return '<span class="ft-icon" style="color:#42a5f5">#</span>';
+  if (ext === 'sh' || ext === 'bash' || ext === 'zsh') return '<span class="ft-icon" style="color:#89e051">$</span>';
+  if (ext === 'plist') return '<span class="ft-icon" style="color:#6d8086">P</span>';
+  if (ext === 'txt' || ext === 'log') return '<span class="ft-icon" style="color:#6d8086">\\u2261</span>';
+  if (name === '.env' || name.startsWith('.env.')) return '<span class="ft-icon" style="color:#ecd53f">\\u26a1</span>';
+  if (name === '.gitignore') return '<span class="ft-icon" style="color:#f14e32">G</span>';
+  return '<span class="ft-icon" style="color:#6d8086">\\u25a1</span>';
+}
+function renderFtNode(path, name, depth, isDir, rootPath) {
+  const expanded = _ftExpanded[path];
+  let html = '<li class="ft-node">';
+  const bin = !isDir && isBinary(name);
+  html += '<div class="ft-row' + (bin ? ' ft-binary' : '') + '" data-ft-path="' + esc(path) + '" data-ft-dir="' + (isDir ? '1' : '0') + '" data-ft-root="' + esc(rootPath) + '" style="padding-left:' + (6 + depth * 16) + 'px">';
+  if (isDir) {
+    html += '<span class="ft-chevron">' + (expanded ? '\\u25be' : '\\u25b8') + '</span>';
+    html += '<span class="ft-icon" style="color:#c09553">\\ud83d\\udcc1</span>';
+    html += '<span class="ft-name ft-name-dir">' + esc(name) + '</span>';
+  } else {
+    html += '<span class="ft-chevron"></span>';
+    html += ftFileIcon(name);
+    const isMd = name.endsWith('.md');
+    html += '<span class="ft-name' + (isMd ? ' ft-name-md' : bin ? ' ft-name-bin' : '') + '">' + esc(name) + '</span>';
+  }
+  html += '</div>';
+  if (isDir && expanded) {
+    const cached = _ftTreeCache[path];
+    if (cached) {
+      html += '<ul class="ft-children">';
+      for (const item of cached) {
+        html += renderFtNode(item.path, item.name, depth + 1, item.type === 'dir', rootPath);
+      }
+      if (cached.length === 0) html += '<li class="ft-loading">Empty</li>';
+      html += '</ul>';
+    } else {
+      html += '<ul class="ft-children"><li class="ft-loading">Loading...</li></ul>';
+    }
+  }
+  html += '</li>';
+  return html;
+}
+
+async function ftToggleDir(path) {
+  if (_ftExpanded[path]) {
+    delete _ftExpanded[path];
+    renderFileTree();
+    return;
+  }
+  _ftExpanded[path] = true;
+  renderFileTree(); // show loading state
+  if (!_ftTreeCache[path]) {
+    try {
+      const r = await fetch('/api/files?path=' + encodeURIComponent(path));
+      if (r.ok) {
+        const data = await r.json();
+        _ftTreeCache[path] = data.items || [];
+      } else {
+        _ftTreeCache[path] = [];
+      }
+    } catch(e) {
+      _ftTreeCache[path] = [];
+    }
+  }
+  renderFileTree();
+}
+
+// Event delegation for file tree clicks
+document.getElementById('sidebar-content').addEventListener('click', function(e) {
+  if (_sidebarView !== 'files') return;
+  const row = e.target.closest('.ft-row');
+  if (!row) return;
+  const path = row.dataset.ftPath;
+  const isDir = row.dataset.ftDir === '1';
+  if (isDir) {
+    ftToggleDir(path);
+  } else {
+    ftOpenFile(path);
+    closeMobileSidebar();
+  }
+});
+
+// === File Tabs ===
+function ftOpenFile(filePath, targetPaneId) {
+  const fileName = filePath.split('/').filter(Boolean).pop() || filePath;
+  if (isBinary(fileName)) return; // Skip binary files
+  // Dedup: if file already open, focus existing tab
+  for (const tid in allTabs) {
+    const t = allTabs[tid];
+    if (t.type === 'file' && t.filePath === filePath) {
+      focusTab(parseInt(tid));
+      return;
+    }
+  }
+  const paneId = targetPaneId || activePaneId || (panes[0] && panes[0].id);
+  if (!paneId) return;
+  const pane = panes.find(p => p.id === paneId);
+  if (!pane) return;
+
+  const id = _nextTabId++;
+  allTabs[id] = { type: 'file', filePath, fileName, session: null, windowIndex: null, windowName: fileName };
+  tabStates[id] = {
+    rawContent: '', last: '', rawMode: false,
+    pendingMsg: null, pendingTime: 0,
+    awaitingResponse: false, lastOutputChange: 0,
+    pollInterval: null, ccStatus: null,
+    fileContent: null, fileLoaded: false, fileRawView: false,
+  };
+  pane.tabIds.push(id);
+  pane.activeTabId = id;
+
+  // Create output element
+  const paneEl = document.getElementById('pane-' + paneId);
+  const placeholder = paneEl.querySelector('.pane-placeholder');
+  if (placeholder) placeholder.remove();
+  const outEl = document.createElement('div');
+  outEl.className = 'pane-output chat';
+  outEl.id = 'tab-output-' + id;
+  outEl.style.display = 'none';
+  outEl.innerHTML = '<div class="turn assistant"><div class="turn-body"><p style="color:var(--text3)">Loading...</p></div></div>';
+  paneEl.querySelector('.pane-input').before(outEl);
+
+  focusTab(id);
+  renderPaneTabs(paneId);
+  loadFileTabContent(id);
+  saveLayout();
+}
+
+async function loadFileTabContent(tabId) {
+  const tab = allTabs[tabId];
+  const state = tabStates[tabId];
+  if (!tab || tab.type !== 'file' || !state) return;
+  try {
+    const r = await fetch('/api/files/read?path=' + encodeURIComponent(tab.filePath));
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      state.fileContent = null; state.fileLoaded = true;
+      renderFileTabOutput(tabId, '<div style="padding:24px;color:var(--text3)">' + esc(err.detail || 'Cannot read file') + '</div>');
+      return;
+    }
+    const data = await r.json();
+    state.fileContent = data.content;
+    state.fileLoaded = true;
+    renderFileTabFormatted(tabId);
+  } catch(e) {
+    state.fileContent = null; state.fileLoaded = true;
+    renderFileTabOutput(tabId, '<div style="padding:24px;color:var(--text3)">Error loading file</div>');
+  }
+}
+
+function highlightMdRaw(text) {
+  // VS Code-like syntax highlighting for raw markdown
+  const lines = text.split('\\n');
+  const out = [];
+  let inFence = false;
+  for (const line of lines) {
+    const e = esc(line);
+    // Fenced code blocks
+    if (/^\\s*```/.test(line)) {
+      inFence = !inFence;
+      out.push('<span class="md-fence">' + e + '</span>');
+      continue;
+    }
+    if (inFence) {
+      out.push('<span class="md-fenced">' + e + '</span>');
+      continue;
+    }
+    // Headings
+    const hm = line.match(/^(#{1,6})\\s/);
+    if (hm) {
+      const marker = esc(hm[1]);
+      const rest = esc(line.slice(hm[0].length));
+      out.push('<span class="md-hm">' + marker + '</span> <span class="md-h">' + rest + '</span>');
+      continue;
+    }
+    // Horizontal rules
+    if (/^(---+|\\*\\*\\*+|___+)\\s*$/.test(line)) {
+      out.push('<span class="md-hr">' + e + '</span>');
+      continue;
+    }
+    // Blockquotes
+    if (/^>/.test(line)) {
+      out.push('<span class="md-blockquote">' + e + '</span>');
+      continue;
+    }
+    // List items (bullet)
+    const bm = line.match(/^(\\s*)([-*+])\\s/);
+    if (bm) {
+      const indent = esc(bm[1]);
+      const rest = esc(line.slice(bm[0].length));
+      out.push(indent + '<span class="md-bullet">' + esc(bm[2]) + '</span> ' + highlightMdInline(rest));
+      continue;
+    }
+    // Numbered list
+    const nm = line.match(/^(\\s*)(\\d+\\.)\\s/);
+    if (nm) {
+      const indent = esc(nm[1]);
+      const rest = esc(line.slice(nm[0].length));
+      out.push(indent + '<span class="md-bullet">' + esc(nm[2]) + '</span> ' + highlightMdInline(rest));
+      continue;
+    }
+    // Table rows
+    if (/^\\|/.test(line)) {
+      out.push(e.replace(/\\|/g, '<span class="md-pipe">|</span>'));
+      continue;
+    }
+    // Normal line — apply inline highlighting
+    out.push(highlightMdInline(e));
+  }
+  return out.join('\\n');
+}
+function highlightMdInline(escaped) {
+  // Bold **text** or __text__
+  let s = escaped.replace(/\\*\\*(.+?)\\*\\*/g, '<span class="md-bm">**</span><span class="md-bold">$1</span><span class="md-bm">**</span>');
+  s = s.replace(/__(.+?)__/g, '<span class="md-bm">__</span><span class="md-bold">$1</span><span class="md-bm">__</span>');
+  // Italic *text* or _text_ (not inside bold markers)
+  s = s.replace(/(?<![*_])\\*([^*]+?)\\*(?![*_])/g, '<span class="md-im">*</span><span class="md-italic">$1</span><span class="md-im">*</span>');
+  s = s.replace(/(?<![*_])_([^_]+?)_(?![*_])/g, '<span class="md-im">_</span><span class="md-italic">$1</span><span class="md-im">_</span>');
+  // Code `text`
+  s = s.replace(/`([^`]+?)`/g, '<span class="md-cm">`</span><span class="md-code">$1</span><span class="md-cm">`</span>');
+  // Links [text](url)
+  s = s.replace(/\\[([^\\]]+?)\\]\\(([^)]+?)\\)/g, '<span class="md-link-bracket">[</span><span class="md-link-text">$1</span><span class="md-link-bracket">](</span><span class="md-link-url">$2</span><span class="md-link-bracket">)</span>');
+  return s;
+}
+function fileExt(name) {
+  const i = name.lastIndexOf('.');
+  return i >= 0 ? name.substring(i + 1).toLowerCase() : '';
+}
+function isMarkdown(name) { return fileExt(name) === 'md'; }
+function isBinary(name) {
+  const bin = ['png','jpg','jpeg','gif','bmp','ico','webp','svg','mp3','mp4','wav','zip','gz','tar','dmg','exe','dll','so','dylib','o','a','pyc','pyo','class','woff','woff2','ttf','eot','pdf'];
+  return bin.includes(fileExt(name));
+}
+function highlightCode(text, ext) {
+  // Simple token-based syntax highlighter for code files
+  const lines = text.split('\\n');
+  const out = [];
+  const kwSets = {
+    py: { kw: /\\b(def|class|import|from|return|if|elif|else|for|while|try|except|finally|with|as|raise|yield|lambda|pass|break|continue|not|and|or|is|in|True|False|None|async|await|self)\\b/g,
+          builtin: /\\b(print|len|range|str|int|float|list|dict|set|tuple|bool|open|type|isinstance|getattr|setattr|hasattr|super|enumerate|zip|map|filter|sorted|reversed|any|all|min|max|sum|abs|round|format|input|id|dir|vars|globals|locals|staticmethod|classmethod|property)\\b/g },
+    js: { kw: /\\b(function|const|let|var|return|if|else|for|while|do|switch|case|break|continue|try|catch|finally|throw|new|delete|typeof|instanceof|class|extends|import|export|from|default|async|await|yield|this|super|true|false|null|undefined|of|in|void)\\b/g,
+          builtin: /\\b(console|document|window|fetch|Promise|Array|Object|String|Number|Boolean|RegExp|Map|Set|JSON|Math|Date|Error|setTimeout|setInterval|clearTimeout|clearInterval|parseInt|parseFloat|encodeURIComponent|decodeURIComponent)\\b/g },
+    sh: { kw: /\\b(if|then|else|elif|fi|for|while|do|done|case|esac|function|return|local|export|source|alias|unset|set|shift|exit|break|continue|in|until|select)\\b/g,
+          builtin: /\\b(echo|cd|ls|rm|cp|mv|mkdir|cat|grep|sed|awk|find|xargs|sort|uniq|wc|head|tail|cut|tr|tee|chmod|chown|curl|wget|ssh|scp|git|docker|npm|pip|brew|apt|sudo|kill|ps|env|which|test|read)\\b/g },
+    toml: { kw: /\\b(true|false)\\b/g, builtin: null },
+    json: { kw: /\\b(true|false|null)\\b/g, builtin: null },
+  };
+  const alias = { ts: 'js', tsx: 'js', jsx: 'js', mjs: 'js', cjs: 'js', bash: 'sh', zsh: 'sh', yml: 'toml', yaml: 'toml', cfg: 'toml', ini: 'toml', conf: 'toml' };
+  const lang = alias[ext] || ext;
+  const kws = kwSets[lang] || null;
+  // Comment patterns per language
+  const lineComment = (lang === 'py' || lang === 'sh' || lang === 'toml') ? '#' : (lang === 'js') ? '//' : null;
+
+  for (const line of lines) {
+    let e = esc(line);
+    // Comment detection (simple: line-level only)
+    if (lineComment) {
+      const stripped = line.trimStart();
+      if (stripped.startsWith(lineComment)) {
+        out.push('<span class="code-comment">' + e + '</span>');
+        continue;
+      }
+    }
+    // Strings — highlight quoted segments
+    e = e.replace(/(&quot;)(.*?)(&quot;)/g, '<span class="code-string">$1$2$3</span>');
+    e = e.replace(/(&#x27;|\\x27)(.*?)(&#x27;|\\x27)/g, '<span class="code-string">$1$2$3</span>');
+    // Apply keyword highlighting if we have patterns
+    if (kws) {
+      if (kws.kw) e = e.replace(kws.kw, '<span class="code-kw">$&</span>');
+      if (kws.builtin) e = e.replace(kws.builtin, '<span class="code-builtin">$&</span>');
+    }
+    // Numbers
+    e = e.replace(/\\b(\\d+\\.?\\d*)\\b/g, function(m) {
+      // Avoid highlighting numbers inside already-highlighted spans
+      return '<span class="code-num">' + m + '</span>';
+    });
+    // Decorators (Python)
+    if (lang === 'py') {
+      e = e.replace(/^(\\s*)(@\\w+)/, '$1<span class="code-decorator">$2</span>');
+    }
+    out.push(e);
+  }
+  return out.join('\\n');
+}
+function renderFileTabFormatted(tabId) {
+  const tab = allTabs[tabId];
+  const state = tabStates[tabId];
+  if (!tab || !state || state.fileContent == null) return;
+  const md = isMarkdown(tab.fileName);
+  let bodyHtml;
+  if (md && !state.fileRawView) {
+    // Markdown formatted view
+    bodyHtml = '<div class="fb-reader"><div class="fb-reader-body">' + mdFile(state.fileContent) + '</div></div>';
+  } else if (md && state.fileRawView) {
+    // Markdown raw view with md-specific highlighting
+    bodyHtml = '<pre class="md-raw">' + highlightMdRaw(state.fileContent) + '</pre>';
+  } else {
+    // Code / text files — syntax highlighted
+    const ext = fileExt(tab.fileName);
+    bodyHtml = '<pre class="code-view">' + highlightCode(state.fileContent, ext) + '</pre>';
+  }
+  let toolbar = '<div class="file-tab-toolbar">'
+    + '<span class="file-tab-path" title="' + esc(tab.filePath) + '">' + esc(tab.filePath) + '</span>';
+  if (md) {
+    toolbar += '<div class="file-tab-toggle">'
+      + '<button class="' + (state.fileRawView ? '' : 'active') + '" onclick="setFileTabView(' + tabId + ',false)">Formatted</button>'
+      + '<button class="' + (state.fileRawView ? 'active' : '') + '" onclick="setFileTabView(' + tabId + ',true)">Raw</button>'
+      + '</div>';
+  }
+  toolbar += '</div>';
+  renderFileTabOutput(tabId, toolbar + bodyHtml);
+}
+
+function renderFileTabOutput(tabId, html) {
+  const outEl = document.getElementById('tab-output-' + tabId);
+  if (outEl) { outEl.innerHTML = html; outEl.scrollTop = 0; }
+}
+
+function setFileTabView(tabId, raw) {
+  const state = tabStates[tabId];
+  if (!state) return;
+  state.fileRawView = raw;
+  renderFileTabFormatted(tabId);
+}
+
 function statusLabel(cc_status) {
   if (cc_status === 'working') return 'Working';
   if (cc_status === 'thinking') return 'Thinking';
@@ -1455,7 +1973,10 @@ function renderOutput(raw, targetEl, state, tabId) {
         html += '<div class="turn user"><div class="turn-label">You</div><div class="turn-body">' + esc(text) + '</div></div>';
       } else {
         const label = lastRole !== 'assistant' ? '<div class="turn-label">Claude</div>' : '';
-        html += '<div class="turn assistant">' + label + '<div class="turn-body">' + md(text) + '</div></div>';
+        // Interactive prompts (AskUserQuestion/plan approval) have ❯ in text —
+        // render as plain text with line breaks to avoid markdown list mangling
+        const body = /\\u276f/.test(text) ? esc(text).replace(/\\n/g, '<br>') : md(text);
+        html += '<div class="turn assistant">' + label + '<div class="turn-body">' + body + '</div></div>';
       }
       lastRole = t.role;
     }
@@ -1710,33 +2231,60 @@ function closeTab(tabId, skipRender) {
       }
     }
     if (!skipRender) {
+      // Update file-tab-active class on pane
+      const pe = document.getElementById('pane-' + pane.id);
+      const newActive = pane.activeTabId ? allTabs[pane.activeTabId] : null;
+      if (pe) pe.classList.toggle('file-tab-active', newActive && newActive.type === 'file');
       renderPaneTabs(pane.id);
       showActiveTabOutput(pane.id);
+      // Update view label for new active tab
+      if (pane.activeTabId) {
+        const st = tabStates[pane.activeTabId];
+        if (newActive && newActive.type === 'file') {
+          document.getElementById('view-label').textContent = isMarkdown(newActive.fileName) ? (st && st.fileRawView ? 'Raw' : 'Formatted') : 'Source';
+        } else if (st) {
+          document.getElementById('view-label').textContent = st.rawMode ? 'Raw' : 'Clean';
+        }
+      }
     }
   }
-  if (!skipRender) { renderSidebar(); updatePolling(); }
+  if (!skipRender) { renderSidebar(); updatePolling(); updateLayout(); }
   saveLayout();
 }
 
 function focusTab(tabId) {
   // Unhide session if tab's session is hidden
   const ft = allTabs[tabId];
-  if (ft && getHiddenSessions().includes(ft.session)) unhideSession(ft.session);
+  if (ft && ft.type !== 'file' && getHiddenSessions().includes(ft.session)) unhideSession(ft.session);
   // Find pane
   for (const p of panes) {
     if (p.tabIds.includes(tabId)) {
       const tabChanged = p.activeTabId !== tabId;
       p.activeTabId = tabId;
       focusPane(p.id);
-      if (tabChanged) renderSidebar();
+      if (tabChanged && _sidebarView === 'sessions') renderSidebar();
       renderPaneTabs(p.id);
       showActiveTabOutput(p.id);
-      updateNotepadContent(p.id);
-      updateQueueContent(p.id);
+      // Toggle file-tab-active class on pane element (hides per-pane input bar)
+      const paneEl = document.getElementById('pane-' + p.id);
+      if (paneEl) paneEl.classList.toggle('file-tab-active', ft && ft.type === 'file');
+      updateLayout(); // also hides global bar for file tabs in single-pane mode
+      if (ft && ft.type !== 'file') {
+        updateNotepadContent(p.id);
+        updateQueueContent(p.id);
+      }
       updatePolling();
       // Update view label
       const state = tabStates[tabId];
-      if (state) document.getElementById('view-label').textContent = state.rawMode ? 'Raw' : 'Clean';
+      if (ft && ft.type === 'file') {
+        if (isMarkdown(ft.fileName)) {
+          document.getElementById('view-label').textContent = state && state.fileRawView ? 'Raw' : 'Formatted';
+        } else {
+          document.getElementById('view-label').textContent = 'Source';
+        }
+      } else if (state) {
+        document.getElementById('view-label').textContent = state.rawMode ? 'Raw' : 'Clean';
+      }
       saveLayout();
       return;
     }
@@ -1805,8 +2353,9 @@ function renderPaneTabs(paneId) {
     if (!tab) continue;
     const active = tid === pane.activeTabId;
     const st = tabStates[tid];
-    const dotClass = st && st.ccStatus ? st.ccStatus : 'none';
-    html += '<div class="pane-tab' + (active ? ' active' : '') + '" draggable="true"'
+    const isFile = tab.type === 'file';
+    const dotClass = isFile ? 'none' : (st && st.ccStatus ? st.ccStatus : 'none');
+    html += '<div class="pane-tab' + (active ? ' active' : '') + (isFile ? ' file-tab' : '') + '" draggable="true"'
       + ' data-tab-id="' + tid + '"'
       + ' onclick="focusTab(' + tid + ')">'
       + '<span class="pane-tab-dot ' + dotClass + '" data-tab-dot="' + tid + '"></span>'
@@ -1814,8 +2363,9 @@ function renderPaneTabs(paneId) {
       + '<span class="pane-tab-close" onclick="event.stopPropagation();closeTab(' + tid + ')">&times;</span>'
       + '</div>';
   }
-  // Notepad toggle button (only if pane has an active tab)
-  if (pane.activeTabId) {
+  // Notepad/Queue/Refresh buttons — only for terminal tabs
+  const activeIsFile = pane.activeTabId && allTabs[pane.activeTabId] && allTabs[pane.activeTabId].type === 'file';
+  if (pane.activeTabId && !activeIsFile) {
     html += '<button class="pane-notepad-btn' + (paneEl.querySelector('.notepad-panel.open') ? ' active' : '') + '" onclick="toggleNotepad(' + paneId + ')" title="Notepad">NOTES</button>';
     const qs = _queueStates[pane.activeTabId];
     const qOpen = paneEl.querySelector('.queue-panel.open');
@@ -1823,6 +2373,8 @@ function renderPaneTabs(paneId) {
     const qRemaining = qs ? qs.items.filter(i => !i.done).length : 0;
     html += '<button class="pane-queue-btn' + (qOpen ? ' active' : '') + (qPlaying ? ' playing' : '') + '" onclick="toggleQueue(' + paneId + ')" title="Task Queue">QUEUE' + (qRemaining > 0 ? ' ' + qRemaining : '') + '</button>';
     html += '<button class="pane-refresh-btn" onclick="hardRefresh(' + paneId + ')" title="Refresh">&#x21bb;</button>';
+  } else if (pane.activeTabId && activeIsFile) {
+    html += '<button class="pane-refresh-btn" onclick="hardRefresh(' + paneId + ')" title="Reload file">&#x21bb;</button>';
   }
   // Close pane button (only if >1 pane)
   if (panes.length > 1) {
@@ -1889,11 +2441,15 @@ function savePaneData(p) {
   return {
     tabIds: p.tabIds.map(tid => {
       const t = allTabs[tid];
-      return t ? { session: t.session, windowIndex: t.windowIndex, windowName: t.windowName } : null;
+      if (!t) return null;
+      if (t.type === 'file') return { type: 'file', filePath: t.filePath, fileName: t.fileName };
+      return { session: t.session, windowIndex: t.windowIndex, windowName: t.windowName };
     }).filter(Boolean),
     activeTab: p.activeTabId ? (() => {
       const t = allTabs[p.activeTabId];
-      return t ? { session: t.session, windowIndex: t.windowIndex } : null;
+      if (!t) return null;
+      if (t.type === 'file') return { type: 'file', filePath: t.filePath };
+      return { session: t.session, windowIndex: t.windowIndex };
     })() : null,
   };
 }
@@ -2527,7 +3083,12 @@ function updateQueueContent(paneId) {
 // === Layout ===
 function updateLayout() {
   const multiPane = panes.length > 1;
-  bar.classList.toggle('hidden', multiPane);
+  // Hide global bar if multi-pane OR if single-pane active tab is a file
+  const activeFileTab = !multiPane && activePaneId && (() => {
+    const p = panes.find(x => x.id === activePaneId);
+    return p && p.activeTabId && allTabs[p.activeTabId] && allTabs[p.activeTabId].type === 'file';
+  })();
+  bar.classList.toggle('hidden', multiPane || !!activeFileTab);
   document.querySelectorAll('.pane-input').forEach(pi => {
     pi.classList.toggle('visible', multiPane);
   });
@@ -2591,6 +3152,8 @@ function setupDivider(div, dir) {
 
 // === Polling ===
 function startTabPolling(tabId) {
+  const tab = allTabs[tabId];
+  if (tab && tab.type === 'file') return; // No polling for file tabs
   const state = tabStates[tabId];
   if (!state || state.pollInterval) return;
   pollTab(tabId);
@@ -2608,6 +3171,8 @@ async function hardRefresh(paneId) {
   const tabId = pane.activeTabId;
   const tab = allTabs[tabId]; const state = tabStates[tabId];
   if (!tab || !state) return;
+  // File tab: re-fetch file content
+  if (tab.type === 'file') { state.fileLoaded = false; loadFileTabContent(tabId); return; }
   // Clear all cached state
   state.last = null; state.rawContent = null; state.pendingMsg = null;
   state.awaitingResponse = false;
@@ -2675,6 +3240,7 @@ function getActiveTab() {
 async function sendToPane(paneId) {
   const pane = panes.find(p => p.id === paneId);
   if (!pane || !pane.activeTabId) return;
+  if (allTabs[pane.activeTabId] && allTabs[pane.activeTabId].type === 'file') return;
   const paneEl = document.getElementById('pane-' + paneId);
   if (!paneEl) return;
   const ta = paneEl.querySelector('.pane-input textarea');
@@ -2706,6 +3272,7 @@ async function sendToPane(paneId) {
 async function sendGlobal() {
   const text = M.value; if (!text) return;
   const active = getActiveTab(); if (!active) return;
+  if (allTabs[active.tabId] && allTabs[active.tabId].type === 'file') return;
   M.value = ''; M.style.height = 'auto'; M.style.overflowY = 'hidden';
   try {
     active.state.pendingMsg = text; active.state.pendingTime = Date.now(); active.state.awaitingResponse = true;
@@ -2728,6 +3295,7 @@ async function sendGlobal() {
 
 async function keyActive(k) {
   const active = getActiveTab(); if (!active) return;
+  if (active.tab && active.tab.type === 'file') return;
   try { await fetch('/api/key/' + k + '?session=' + encodeURIComponent(active.tab.session) + '&window=' + active.tab.windowIndex); } catch(e) {}
 }
 
@@ -2735,6 +3303,7 @@ function prefill(text) { M.value = M.value ? M.value + ' ' + text : text; M.focu
 
 async function sendResumeActive() {
   const active = getActiveTab(); if (!active) return;
+  if (active.tab && active.tab.type === 'file') return;
   active.state.rawMode = true;
   document.getElementById('view-label').textContent = 'Raw';
   try {
@@ -2775,6 +3344,15 @@ function panePrefill(btn, text) {
 // === View toggle ===
 function toggleRaw() {
   const active = getActiveTab(); if (!active) return;
+  const tab = allTabs[active.tabId];
+  // File tab: toggle formatted/raw (markdown only)
+  if (tab && tab.type === 'file') {
+    if (!isMarkdown(tab.fileName)) return; // non-md files have no toggle
+    active.state.fileRawView = !active.state.fileRawView;
+    document.getElementById('view-label').textContent = active.state.fileRawView ? 'Raw' : 'Formatted';
+    renderFileTabFormatted(active.tabId);
+    return;
+  }
   active.state.rawMode = !active.state.rawMode;
   document.getElementById('view-label').textContent = active.state.rawMode ? 'Raw' : 'Clean';
   const outEl = document.getElementById('tab-output-' + active.tabId);
@@ -2971,6 +3549,7 @@ function openTab(session, windowIndex, windowName) {
   let dragType = null, dragSession = null, dragWidx = null;
 
   sbContent.addEventListener('dragstart', e => {
+    if (_sidebarView !== 'sessions') return;
     const win = e.target.closest('.sb-win[draggable]');
     const sess = e.target.closest('.sb-session[draggable]');
     if (win) {
@@ -3154,10 +3733,12 @@ async function loadDashboard() {
   try {
     const r = await fetch('/api/dashboard');
     _dashboardData = await r.json();
-    renderSidebar();
+    if (_sidebarView === 'sessions') renderSidebar();
+    else renderFileTree();
     // Update tab names and status dots from dashboard
     for (const tid in allTabs) {
       const tab = allTabs[tid];
+      if (tab.type === 'file') continue;
       const sess = _dashboardData.sessions.find(s => s.name === tab.session);
       if (sess) {
         const win = sess.windows.find(w => w.index === tab.windowIndex);
@@ -3263,7 +3844,9 @@ function windowExists(session, windowIndex) {
 
 function restorePaneTabs(paneId, paneData) {
   for (const t of paneData.tabIds) {
-    if (windowExists(t.session, t.windowIndex)) {
+    if (t.type === 'file') {
+      ftOpenFile(t.filePath, paneId);
+    } else if (windowExists(t.session, t.windowIndex)) {
       createTab(t.session, t.windowIndex, t.windowName, paneId);
     }
   }
@@ -3272,10 +3855,11 @@ function restorePaneTabs(paneId, paneData) {
     if (pane) {
       for (const tid of pane.tabIds) {
         const tab = allTabs[tid];
-        if (tab && tab.session === paneData.activeTab.session
-            && tab.windowIndex === paneData.activeTab.windowIndex) {
-          focusTab(tid);
-          break;
+        if (paneData.activeTab.type === 'file') {
+          if (tab && tab.type === 'file' && tab.filePath === paneData.activeTab.filePath) { focusTab(tid); break; }
+        } else {
+          if (tab && tab.type !== 'file' && tab.session === paneData.activeTab.session
+              && tab.windowIndex === paneData.activeTab.windowIndex) { focusTab(tid); break; }
         }
       }
     }
@@ -3296,7 +3880,7 @@ function restoreLayout() {
       return out;
     }
     const allPaneData = flatPanes(saved);
-    const anyValid = allPaneData.some(p => p.tabIds && p.tabIds.some(t => windowExists(t.session, t.windowIndex)));
+    const anyValid = allPaneData.some(p => p.tabIds && p.tabIds.some(t => t.type === 'file' || windowExists(t.session, t.windowIndex)));
     if (!anyValid) { _restoringLayout = false; return false; }
     for (const item of saved) {
       if (item.stack) {
@@ -3586,6 +4170,85 @@ async def api_put_prefs(body: dict):
             data[k] = v
     _save_prefs(data)
     return JSONResponse({"ok": True})
+
+
+# --- File browser helpers ---
+
+def _get_session_cwds():
+    """Get unique working directories from all tmux panes (lightweight, no capture-pane)."""
+    r = _run(
+        ["tmux", "list-panes", "-a", "-F", "#{pane_current_path}"],
+        capture_output=True, text=True,
+    )
+    cwds = set()
+    for line in r.stdout.strip().split("\n"):
+        line = line.strip()
+        if line:
+            cwds.add(os.path.realpath(line))
+    return cwds
+
+
+def _is_path_allowed(path, roots):
+    """Check if resolved path is under at least one allowed root."""
+    resolved = os.path.realpath(path)
+    for root in roots:
+        if resolved == root or resolved.startswith(root + os.sep):
+            return True
+    return False
+
+
+@app.get("/api/files")
+async def api_list_files(path: str):
+    roots = _get_session_cwds()
+    resolved = os.path.realpath(path)
+    if not _is_path_allowed(resolved, roots):
+        return JSONResponse({"detail": "Access denied: path outside session directories"}, status_code=403)
+    if not os.path.isdir(resolved):
+        return JSONResponse({"detail": "Not a directory"}, status_code=404)
+    items = []
+    try:
+        entries = sorted(os.scandir(resolved), key=lambda e: (not e.is_dir(), e.name.lower()))
+    except PermissionError:
+        return JSONResponse({"detail": "Permission denied"}, status_code=403)
+    for entry in entries:
+        if entry.name.startswith('.'):
+            continue
+        if entry.is_dir(follow_symlinks=False):
+            items.append({"name": entry.name, "type": "dir", "path": os.path.join(resolved, entry.name)})
+        elif entry.is_file():
+            try:
+                st = entry.stat()
+                items.append({"name": entry.name, "type": "file", "path": os.path.join(resolved, entry.name), "size": st.st_size})
+            except OSError:
+                pass
+    # Compute parent (None if at a root)
+    parent = os.path.dirname(resolved)
+    if not _is_path_allowed(parent, roots) or parent == resolved:
+        parent = None
+    return JSONResponse({"path": resolved, "parent": parent, "items": items, "allowed_roots": sorted(roots)})
+
+
+@app.get("/api/files/read")
+async def api_read_file(path: str):
+    roots = _get_session_cwds()
+    resolved = os.path.realpath(path)
+    if not _is_path_allowed(resolved, roots):
+        return JSONResponse({"detail": "Access denied: path outside session directories"}, status_code=403)
+    if not os.path.isfile(resolved):
+        return JSONResponse({"detail": "File not found"}, status_code=404)
+    try:
+        size = os.path.getsize(resolved)
+    except OSError:
+        return JSONResponse({"detail": "Cannot access file"}, status_code=403)
+    if size > 1_048_576:  # 1MB limit
+        return JSONResponse({"detail": "File too large (>1MB)"}, status_code=413)
+    try:
+        with open(resolved, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+    except (OSError, PermissionError):
+        return JSONResponse({"detail": "Cannot read file"}, status_code=403)
+    name = os.path.basename(resolved)
+    return JSONResponse({"path": resolved, "name": name, "content": content, "size": size})
 
 
 if __name__ == "__main__":

@@ -141,6 +141,9 @@
   - `cleanTerminal` expanded to filter `├───┤` dividers (added `├`/`┤` to border filter), plus general filter removing lines where >60% chars are box-drawing with >20 box-drawing chars total (catches labeled dividers like `── memory ──`).
   - `parseCCTurns` box-drawing filter expanded from specific chars (`─━┄┈═`) to full range `[\u2500-\u257f]` with lower threshold (20 instead of 60).
 
+## Recently Completed (cont. 21)
+- **2026-02-22**: File Browser → Sidebar Integration — replaced fullscreen `#fb-overlay` with dual-tab sidebar (Sessions | Files). VS Code-like compact file tree (22px rows, lazy-loaded via `/api/files`, cached in `_ftTreeCache`). Files open as file tabs in panes (`allTabs[id].type='file'`). Markdown files get Formatted/Raw toggle (rendered markdown via `mdFile()` or syntax-highlighted raw view). All file types supported — code files get keyword-based syntax highlighting (Python/JS/Shell/JSON/TOML), binary files dimmed and non-clickable. File tabs skip polling/send/keys/queue/notepad. Layout persistence saves/restores file tabs. Input bar hidden for file tabs. Old overlay HTML/CSS/JS fully removed.
+
 ## Active Work
 None
 
