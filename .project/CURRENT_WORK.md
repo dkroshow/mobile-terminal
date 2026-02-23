@@ -144,6 +144,11 @@
 ## Recently Completed (cont. 21)
 - **2026-02-22**: File Browser → Sidebar Integration — replaced fullscreen `#fb-overlay` with dual-tab sidebar (Sessions | Files). VS Code-like compact file tree (22px rows, lazy-loaded via `/api/files`, cached in `_ftTreeCache`). Files open as file tabs in panes (`allTabs[id].type='file'`). Markdown files get Formatted/Raw toggle (rendered markdown via `mdFile()` or syntax-highlighted raw view). All file types supported — code files get keyword-based syntax highlighting (Python/JS/Shell/JSON/TOML), binary files dimmed and non-clickable. File tabs skip polling/send/keys/queue/notepad. Layout persistence saves/restores file tabs. Input bar hidden for file tabs. Old overlay HTML/CSS/JS fully removed.
 
+## Recently Completed (cont. 22)
+- **2026-02-22**: Ghost text filtering via ANSI codes — `capture-pane -e` captures with escape codes, server-side `strip_ghost_text()` removes dim text (SGR 2 = ghost suggestions) and reverse-video cursor char (SGR 7) before stripping ANSI. Replaces old heuristic JS `stripSuggestion()`. Fixes both ghost suggestions and text typed directly into tmux showing in UI.
+- **2022-02-22**: File tree enhancements — hidden files/folders now shown (only `.git`, `__pycache__`, `node_modules`, `.DS_Store` excluded); markdown defaults to raw view; text size uses `--sb-name`/`--sb-detail`/`--sb-tiny` CSS vars (matches Sessions); drag reorder + HIDE/SHOW for root directories (persisted to `ft:root-order`, `ft:hidden-roots` prefs).
+- **2026-02-22**: Font rendering — added `text-rendering:optimizeLegibility`, `-moz-osx-font-smoothing:grayscale`, `font-feature-settings:'kern' 1`.
+
 ## Active Work
 None
 

@@ -53,8 +53,34 @@ def _run(cmd, **kwargs):
         return r
 
 
+DIM_SPAN_RE = re.compile(
+    r'\x1b\[(?:[0-9;]*;)?2m'   # SGR with dim/faint attribute (code 2)
+    r'(.*?)'                     # dim text to remove
+    r'(?=\x1b\[0m|\x1b\[[0-9;]*[^m]|\Z)',  # until reset or new sequence
+    re.DOTALL
+)
+REVERSE_CHAR_RE = re.compile(
+    r'\x1b\[7m'                 # SGR reverse video (cursor char)
+    r'(.)'                       # single cursor character
+    r'\x1b\[(?:0m|27m)'         # reset or reverse-off
+)
+
+
+def strip_ghost_text(text: str) -> str:
+    """Remove dim/faint text (ghost suggestions) and reverse-video cursor char from ANSI output.
+    CC's TUI renders ghost suggestions with SGR 2 (dim) and the cursor char with SGR 7 (reverse).
+    Must be called BEFORE stripping ANSI codes."""
+    # Remove dim/faint spans (ghost suggestion text after cursor)
+    # Pattern: \e[0;2m...text...\e[0m  or  \e[2m...text...\e[0m
+    text = re.sub(r'\x1b\[0?;?2m[^\x1b]*', '', text)
+    # Remove reverse-video cursor char — keep the char itself since it's real typed text
+    text = REVERSE_CHAR_RE.sub(r'\1', text)
+    return text
+
+
 def clean_terminal_text(text: str) -> str:
     """Strip ANSI escapes and control characters from terminal output."""
+    text = strip_ghost_text(text)
     text = ANSI_RE.sub("", text)
     text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]', '', text)
     return text
@@ -119,7 +145,7 @@ def send_special(key: str, session=None, window=None):
 def get_output(session=None, window=None) -> str:
     target = _tmux_target(session, window)
     r = _run(
-        ["tmux", "capture-pane", "-t", target, "-p", "-S", "-200"],
+        ["tmux", "capture-pane", "-t", target, "-e", "-p", "-S", "-200"],
         capture_output=True, text=True,
     )
     text = clean_terminal_text(r.stdout)
@@ -135,7 +161,7 @@ def get_pane_preview(session: str, window: int, lines: int = 5) -> str:
     """Capture last N lines from a specific pane for preview."""
     target = f"{session}:{window}"
     r = _run(
-        ["tmux", "capture-pane", "-t", target, "-p", "-S", f"-{lines}"],
+        ["tmux", "capture-pane", "-t", target, "-e", "-p", "-S", f"-{lines}"],
         capture_output=True, text=True,
     )
     return clean_terminal_text(r.stdout).strip()
@@ -413,7 +439,9 @@ HTML = """\
 * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
 html, body { height:100%; background:var(--bg); color:var(--text);
   font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif;
-  overflow:hidden; -webkit-font-smoothing:antialiased; }
+  font-weight:400;
+  overflow:hidden; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+  text-rendering:optimizeLegibility; font-feature-settings:'kern' 1; }
 
 /* --- App layout --- */
 #app { display:flex; height:100%; }
@@ -528,6 +556,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   #sidebar-backdrop.open { display:block; }
   .sb-win-detail-btn { opacity:1; }
   .sb-hide-btn { opacity:1; }
+  .ft-hide-btn { opacity:1; }
 }
 
 /* --- Main area --- */
@@ -927,21 +956,34 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   white-space:nowrap; overflow:hidden; height:22px; }
 .ft-row:hover { background:rgba(255,255,255,0.05); }
 .ft-row:active { background:rgba(255,255,255,0.08); }
-.ft-chevron { width:16px; font-size:10px; color:var(--text3); flex-shrink:0;
+.ft-chevron { width:16px; font-size:var(--sb-tiny); color:var(--text3); flex-shrink:0;
   text-align:center; display:inline-flex; align-items:center; justify-content:center; }
-.ft-icon { font-size:14px; flex-shrink:0; width:16px; text-align:center; opacity:0.7; }
-.ft-name { font-size:13px; color:var(--text); overflow:hidden;
+.ft-icon { font-size:var(--sb-name); flex-shrink:0; width:16px; text-align:center; opacity:0.7; }
+.ft-name { font-size:var(--sb-name); color:var(--text); overflow:hidden;
   text-overflow:ellipsis; flex:1; line-height:22px; }
 .ft-name-dir { color:var(--text); }
 .ft-name-md { color:#519aba; }
 .ft-name-bin { color:var(--text3); opacity:0.5; }
 .ft-row.ft-binary { cursor:default; opacity:0.4; }
 .ft-row.ft-binary:hover { background:none; }
-.ft-root-label { font-size:11px; font-weight:600; color:var(--text3); text-transform:uppercase;
-  letter-spacing:0.3px; margin-top:6px; padding:4px 6px 2px;
-  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ft-root-group { position:relative; }
+.ft-root-group.dragging { opacity:0.4; }
+.ft-root-group.ft-drag-over { border-top:2px solid var(--accent); }
+.ft-root-label { font-size:var(--sb-detail); font-weight:600; color:var(--text3); text-transform:uppercase;
+  letter-spacing:0.3px; margin-top:6px; padding:4px 6px 2px; display:flex; align-items:center; gap:4px;
+  overflow:hidden; white-space:nowrap; cursor:grab; }
 .ft-root-label:first-child { margin-top:0; }
-.ft-empty { padding:24px 12px; text-align:center; color:var(--text3); font-size:13px; }
+.ft-root-name { overflow:hidden; text-overflow:ellipsis; flex:1; }
+.ft-hide-btn { background:none; border:none; color:var(--text3); font-size:var(--sb-tiny);
+  cursor:pointer; opacity:0; padding:0 4px; flex-shrink:0; transition:opacity 0.15s; }
+.ft-root-label:hover .ft-hide-btn { opacity:1; }
+.ft-hide-btn:hover { color:var(--text); }
+.ft-hidden-header { padding:12px 4px 4px; color:var(--text3); font-size:var(--sb-detail);
+  cursor:pointer; user-select:none; }
+.ft-hidden-header:hover { color:var(--text); }
+.ft-hidden-chevron { display:inline-block; transition:transform 0.15s; font-size:8px; }
+.ft-hidden-chevron.open { transform:rotate(90deg); }
+.ft-empty { padding:24px 12px; text-align:center; color:var(--text3); font-size:var(--sb-detail); }
 .ft-loading { color:var(--text3); font-size:12px; padding:2px 6px; padding-left:36px; height:22px;
   line-height:22px; }
 .ft-children { list-style:none; margin:0; padding:0; }
@@ -1206,6 +1248,9 @@ let _queueStates = {}; // tabId -> { items: [{text, done}], playing: false, curr
 let _sidebarView = 'sessions'; // 'sessions' | 'files'
 let _ftTreeCache = {}; // path -> {items, expanded}
 let _ftExpanded = {}; // path -> true
+let _ftRootOrder = []; // persisted root order
+let _ftHiddenRoots = []; // hidden root paths
+let _ftHiddenExpanded = false;
 
 const M = document.getElementById('msg');
 const bar = document.getElementById('bar');
@@ -1300,26 +1345,76 @@ function updateFileTreeRoots() {
       for (const w of s.windows) { if (w.cwd) cwds.add(w.cwd); }
     }
   }
-  return [...cwds].sort();
+  let all = [...cwds].sort();
+  // Apply persisted order
+  if (_ftRootOrder.length) {
+    const ordered = _ftRootOrder.filter(p => all.includes(p));
+    const rest = all.filter(p => !_ftRootOrder.includes(p));
+    all = [...ordered, ...rest];
+  }
+  return all;
+}
+
+function getHiddenRoots() {
+  return _ftHiddenRoots;
+}
+function setHiddenRoots(arr) {
+  _ftHiddenRoots = arr;
+  prefs.setItem('ft:hidden-roots', JSON.stringify(arr));
+}
+function hideFtRoot(path) {
+  const h = getHiddenRoots();
+  if (!h.includes(path)) { h.push(path); setHiddenRoots(h); }
+  renderFileTree();
+}
+function unhideFtRoot(path) {
+  setHiddenRoots(getHiddenRoots().filter(p => p !== path));
+  renderFileTree();
+}
+function saveFtRootOrder() {
+  prefs.setItem('ft:root-order', JSON.stringify(_ftRootOrder));
 }
 
 function renderFileTree() {
   const content = document.getElementById('sidebar-content');
-  const roots = updateFileTreeRoots();
-  if (roots.length === 0) {
+  const allRoots = updateFileTreeRoots();
+  const hidden = getHiddenRoots();
+  const roots = allRoots.filter(r => !hidden.includes(r));
+  const hiddenRoots = allRoots.filter(r => hidden.includes(r));
+  if (roots.length === 0 && hiddenRoots.length === 0) {
     content.innerHTML = '<div class="ft-empty">No active sessions found</div>';
     content._lastHTML = null;
     return;
   }
   let html = '';
   for (const root of roots) {
-    html += '<div class="ft-root-label" title="' + esc(root) + '">' + esc(abbreviateCwd(root)) + '</div>';
-    html += '<ul class="ft-tree">';
-    html += renderFtNode(root, root.split('/').filter(Boolean).pop() || root, 0, true, root);
-    html += '</ul>';
+    html += renderFtRootGroup(root, false);
+  }
+  if (hiddenRoots.length > 0) {
+    html += '<div class="ft-hidden-header" onclick="_ftHiddenExpanded=!_ftHiddenExpanded;renderFileTree()">'
+      + '<span class="ft-hidden-chevron' + (_ftHiddenExpanded ? ' open' : '') + '">&#9654;</span>'
+      + ' Hidden (' + hiddenRoots.length + ')</div>';
+    if (_ftHiddenExpanded) {
+      for (const root of hiddenRoots) {
+        html += renderFtRootGroup(root, true);
+      }
+    }
   }
   content.innerHTML = html;
   content._lastHTML = null;
+}
+
+function renderFtRootGroup(root, isHidden) {
+  let html = '<div class="ft-root-group" draggable="true" data-ft-root-path="' + esc(root) + '">';
+  html += '<div class="ft-root-label" title="' + esc(root) + '">';
+  html += '<span class="ft-root-name">' + esc(abbreviateCwd(root)) + '</span>';
+  html += '<button class="ft-hide-btn" data-ft-hide-action="' + (isHidden ? 'show' : 'hide') + '" data-ft-hide-path="' + esc(root) + '">' + (isHidden ? 'SHOW' : 'HIDE') + '</button>';
+  html += '</div>';
+  html += '<ul class="ft-tree">';
+  html += renderFtNode(root, root.split('/').filter(Boolean).pop() || root, 0, true, root);
+  html += '</ul>';
+  html += '</div>';
+  return html;
 }
 
 function ftFileIcon(name) {
@@ -1400,6 +1495,15 @@ async function ftToggleDir(path) {
 // Event delegation for file tree clicks
 document.getElementById('sidebar-content').addEventListener('click', function(e) {
   if (_sidebarView !== 'files') return;
+  // Hide/show button
+  const hideBtn = e.target.closest('.ft-hide-btn');
+  if (hideBtn) {
+    e.stopPropagation();
+    const path = hideBtn.dataset.ftHidePath;
+    if (hideBtn.dataset.ftHideAction === 'hide') hideFtRoot(path);
+    else unhideFtRoot(path);
+    return;
+  }
   const row = e.target.closest('.ft-row');
   if (!row) return;
   const path = row.dataset.ftPath;
@@ -1436,7 +1540,7 @@ function ftOpenFile(filePath, targetPaneId) {
     pendingMsg: null, pendingTime: 0,
     awaitingResponse: false, lastOutputChange: 0,
     pollInterval: null, ccStatus: null,
-    fileContent: null, fileLoaded: false, fileRawView: false,
+    fileContent: null, fileLoaded: false, fileRawView: true,
   };
   pane.tabIds.push(id);
   pane.activeTabId = id;
@@ -1908,33 +2012,10 @@ function parseCCTurns(text) {
 }
 
 // === Render output into target element ===
-function stripSuggestion(raw) {
-  if (!/\\u276f/.test(raw) || !/\\u23fa/.test(raw)) return raw;
-  const clean = cleanTerminal(raw);
-  if (!isIdle(clean)) return raw;
-  // Find the prompt ❯ line (near column 0) and strip ghost suggestion text.
-  // Skip indented ❯ lines (AskUserQuestion/plan options) — only strip prompt.
-  const lines = raw.split('\\n');
-  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 10); i--) {
-    const s = lines[i].replace(/\\u00a0/g, ' ');
-    if (/\\u276f/.test(s)) {
-      // Check how many chars before ❯ (after removing │ borders)
-      const col = s.indexOf('\\u276f');
-      const before = s.substring(0, col).replace(/\\u2502/g, '');
-      if (before.length <= 1) {
-        // Prompt ❯ (at/near column 0): strip ghost text
-        lines[i] = lines[i].replace(/(\\u276f)\\s*.*/, '$1');
-        break;
-      }
-      // Indented ❯ (option line): skip, keep searching for prompt
-    }
-  }
-  return lines.join('\\n');
-}
 function renderOutput(raw, targetEl, state, tabId) {
   if (state.rawMode) {
     targetEl.className = 'pane-output raw';
-    targetEl.textContent = stripSuggestion(raw);
+    targetEl.textContent = raw;
     return;
   }
   targetEl.className = 'pane-output chat';
@@ -3546,9 +3627,20 @@ function openTab(session, windowIndex, windowName) {
 // === Sidebar drag reorder ===
 (function() {
   const sbContent = document.getElementById('sidebar-content');
-  let dragType = null, dragSession = null, dragWidx = null;
+  let dragType = null, dragSession = null, dragWidx = null, dragFtRoot = null;
 
   sbContent.addEventListener('dragstart', e => {
+    if (_sidebarView === 'files') {
+      const rootGroup = e.target.closest('.ft-root-group[draggable]');
+      if (rootGroup) {
+        dragType = 'ft-root';
+        dragFtRoot = rootGroup.dataset.ftRootPath;
+        rootGroup.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', 'ft-root');
+      }
+      return;
+    }
     if (_sidebarView !== 'sessions') return;
     const win = e.target.closest('.sb-win[draggable]');
     const sess = e.target.closest('.sb-session[draggable]');
@@ -3571,8 +3663,11 @@ function openTab(session, windowIndex, windowName) {
 
   sbContent.addEventListener('dragover', e => {
     e.preventDefault();
-    sbContent.querySelectorAll('.sb-drag-over').forEach(el => el.classList.remove('sb-drag-over'));
-    if (dragType === 'window') {
+    sbContent.querySelectorAll('.sb-drag-over,.ft-drag-over').forEach(el => el.classList.remove('sb-drag-over', 'ft-drag-over'));
+    if (dragType === 'ft-root') {
+      const rg = e.target.closest('.ft-root-group');
+      if (rg && rg.dataset.ftRootPath !== dragFtRoot) rg.classList.add('ft-drag-over');
+    } else if (dragType === 'window') {
       const win = e.target.closest('.sb-win');
       if (win && win.dataset.session === dragSession) win.classList.add('sb-drag-over');
     } else if (dragType === 'session') {
@@ -3582,19 +3677,32 @@ function openTab(session, windowIndex, windowName) {
   });
 
   sbContent.addEventListener('dragleave', e => {
-    const el = e.target.closest('.sb-drag-over');
-    if (el) el.classList.remove('sb-drag-over');
+    const el = e.target.closest('.sb-drag-over,.ft-drag-over');
+    if (el) el.classList.remove('sb-drag-over', 'ft-drag-over');
   });
 
   sbContent.addEventListener('drop', e => {
     e.preventDefault();
-    sbContent.querySelectorAll('.sb-drag-over,.dragging').forEach(el => {
-      el.classList.remove('sb-drag-over', 'dragging');
+    sbContent.querySelectorAll('.sb-drag-over,.ft-drag-over,.dragging').forEach(el => {
+      el.classList.remove('sb-drag-over', 'ft-drag-over', 'dragging');
     });
-    if (dragType === 'session') {
+    if (dragType === 'ft-root') {
+      const target = e.target.closest('.ft-root-group');
+      if (target && target.dataset.ftRootPath !== dragFtRoot) {
+        const allGroups = [...sbContent.querySelectorAll('.ft-root-group')].map(el => el.dataset.ftRootPath);
+        const fromIdx = allGroups.indexOf(dragFtRoot);
+        const toIdx = allGroups.indexOf(target.dataset.ftRootPath);
+        if (fromIdx >= 0 && toIdx >= 0) {
+          allGroups.splice(fromIdx, 1);
+          allGroups.splice(toIdx, 0, dragFtRoot);
+          _ftRootOrder = allGroups;
+          saveFtRootOrder();
+          renderFileTree();
+        }
+      }
+    } else if (dragType === 'session') {
       const target = e.target.closest('.sb-session');
       if (target && target.dataset.session !== dragSession) {
-        // Build full session order
         const allSessions = [...sbContent.querySelectorAll('.sb-session')].map(el => el.dataset.session);
         const fromIdx = allSessions.indexOf(dragSession);
         const toIdx = allSessions.indexOf(target.dataset.session);
@@ -3624,15 +3732,15 @@ function openTab(session, windowIndex, windowName) {
       }
     }
     _sbDragging = false;
-    dragType = null; dragSession = null; dragWidx = null;
+    dragType = null; dragSession = null; dragWidx = null; dragFtRoot = null;
   });
 
   sbContent.addEventListener('dragend', () => {
-    sbContent.querySelectorAll('.sb-drag-over,.dragging').forEach(el => {
-      el.classList.remove('sb-drag-over', 'dragging');
+    sbContent.querySelectorAll('.sb-drag-over,.ft-drag-over,.dragging').forEach(el => {
+      el.classList.remove('sb-drag-over', 'ft-drag-over', 'dragging');
     });
     _sbDragging = false;
-    dragType = null; dragSession = null; dragWidx = null;
+    dragType = null; dragSession = null; dragWidx = null; dragFtRoot = null;
   });
 })();
 
@@ -3944,6 +4052,8 @@ async function init() {
   try { const saved = prefs.getItem('textSize'); if (saved !== null) applyTextSize(parseInt(saved)); } catch(e) {}
   try { const sw = prefs.getItem('sidebar:width'); if (sw) document.documentElement.style.setProperty('--sidebar-w', sw + 'px'); } catch(e) {}
   try { const so = JSON.parse(prefs.getItem('sidebar:order')); if (so) _sidebarOrder = so; } catch(e) {}
+  try { const fo = JSON.parse(prefs.getItem('ft:root-order')); if (fo) _ftRootOrder = fo; } catch(e) {}
+  try { const fh = JSON.parse(prefs.getItem('ft:hidden-roots')); if (fh) _ftHiddenRoots = fh; } catch(e) {}
   await loadDashboard();
   cleanupStaleStorage();
   if (!restoreLayout()) {
@@ -4211,7 +4321,7 @@ async def api_list_files(path: str):
     except PermissionError:
         return JSONResponse({"detail": "Permission denied"}, status_code=403)
     for entry in entries:
-        if entry.name.startswith('.'):
+        if entry.name in ('.', '..', '.git', '__pycache__', 'node_modules', '.DS_Store'):
             continue
         if entry.is_dir(follow_symlinks=False):
             items.append({"name": entry.name, "type": "dir", "path": os.path.join(resolved, entry.name)})
