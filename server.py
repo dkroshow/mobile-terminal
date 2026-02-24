@@ -2217,6 +2217,12 @@ function parseCCTurns(text) {
       }
     }
   }
+  // Find last ❯ line index — if not a realPrompt, it's the user's just-submitted input
+  // (not yet acknowledged by CC with ⏺) and should be excluded from assistant turns
+  let lastPromptIdx = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/^\\u276f/.test(lines[i].replace(/\\u00a0/g, ' '))) { lastPromptIdx = i; break; }
+  }
   const turns = []; let cur = null, inTool = false, sawStatus = false;
   for (let li = 0; li < lines.length; li++) {
     const line = lines[li];
@@ -2236,8 +2242,12 @@ function parseCCTurns(text) {
       if (msg.startsWith('/')) { cur = null; inTool = false; sawStatus = false; continue; }
       cur = { role: 'user', lines: msg ? [msg] : [] }; inTool = false; sawStatus = false; continue;
     }
-    // Non-prompt ❯ line (menu selection) — treat as regular text, strip the ❯
+    // Non-prompt ❯ line (menu selection OR unacknowledged user input)
     if (/^\\u276f/.test(raw) && !realPrompts.has(li)) {
+      // Last ❯ line that isn't a real prompt = user's just-submitted input (CC hasn't
+      // responded with ⏺ yet). Skip it — pendingMsg handles display.
+      if (li === lastPromptIdx) continue;
+      // Earlier non-prompt ❯ lines are menu selections — add to current turn
       const menuText = t.replace(/^\\u276f\\s*/, '').trim();
       if (cur && !inTool && menuText) cur.lines.push(menuText);
       continue;
@@ -2286,9 +2296,13 @@ function renderOutput(raw, targetEl, state, tabId) {
   if (isClaudeCode(clean)) {
     const turns = parseCCTurns(clean);
     if (state.pendingMsg) {
-      const userTurns = turns.filter(t => t.role === 'user');
-      const anyMatch = userTurns.some(u => u.lines.join(' ').includes(state.pendingMsg.substring(0, 20)));
-      if (anyMatch) state.pendingMsg = null;
+      const snippet = state.pendingMsg.substring(0, 20);
+      // Check all turns (user and assistant) — submitted text may appear in assistant turn
+      // before CC responds (parser absorbs non-realPrompt ❯ lines into current turn)
+      const anyTurnMatch = turns.some(t => t.lines.join(' ').includes(snippet));
+      // Also check raw text for ❯ followed by our text (most reliable)
+      const rawMatch = clean.includes(snippet);
+      if (anyTurnMatch || rawMatch) state.pendingMsg = null;
       // Safety timeout: 10s max for pendingMsg display
       else if (state.pendingTime && (Date.now() - state.pendingTime) > 10000)
         state.pendingMsg = null;
@@ -2799,7 +2813,8 @@ function savePaneData(p) {
       const t = allTabs[tid];
       if (!t) return null;
       if (t.type === 'file') return { type: 'file', filePath: t.filePath, fileName: t.fileName };
-      return { session: t.session, windowIndex: t.windowIndex, windowName: t.windowName };
+      const st = tabStates[tid];
+      return { session: t.session, windowIndex: t.windowIndex, windowName: t.windowName, rawMode: st ? st.rawMode : false };
     }).filter(Boolean),
     activeTab: p.activeTabId ? (() => {
       const t = allTabs[p.activeTabId];
@@ -4238,6 +4253,14 @@ function restorePaneTabs(paneId, paneData) {
       ftOpenFile(t.filePath, paneId);
     } else if (windowExists(t.session, t.windowIndex)) {
       createTab(t.session, t.windowIndex, t.windowName, paneId);
+      // Restore rawMode if saved
+      if (t.rawMode) {
+        const pane = panes.find(p => p.id === paneId);
+        if (pane) {
+          const tid = pane.tabIds[pane.tabIds.length - 1];
+          if (tid != null && tabStates[tid]) tabStates[tid].rawMode = true;
+        }
+      }
     }
   }
   if (paneData.activeTab) {

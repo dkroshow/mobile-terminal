@@ -157,6 +157,10 @@
 - **2026-02-24**: Pane close layout fix — `removePane()` now clears inline `flex`/`width`/`height` on all remaining `.pane` and `.pane-stack` elements, so they revert to `flex:1` and evenly fill freed space (divider drag sets `flex:none` + px sizes which persisted after removal).
 - **2026-02-24**: Defensive `file-tab-active` sync — `showActiveTabOutput()` now also toggles `file-tab-active` class on pane element, ensuring input bar visibility is always correct after tab switches.
 
+## Recently Completed (cont. 25)
+- **2026-02-24**: Fix submitted prompt appearing in Claude's last response — `parseCCTurns()` was absorbing unacknowledged `❯` lines (user's just-submitted text before CC responds with `⏺`) into the current assistant turn. Now the last `❯` line that isn't a `realPrompt` is skipped (pendingMsg handles display). Also fixed `pendingMsg` clearing: now checks all turns + raw terminal text (was only checking user turns, missing text absorbed into assistant turns).
+- **2026-02-24**: Raw/Clean view persistence — `rawMode` per-tab now saved in layout data (`savePaneData`) and restored on browser refresh (`restorePaneTabs`). Previously only persisted within a session (in-memory `tabStates`), lost on page reload.
+
 ## Active Work
 None
 
