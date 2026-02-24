@@ -152,6 +152,11 @@
 ## Recently Completed (cont. 23)
 - **2026-02-23**: File Editor with Auto-Refresh — file tabs now editable. Edit/View toggle in toolbar, monospace `<textarea>` editor, dirty state tracking (accent dot on tab + toolbar), Save button + Cmd/Ctrl+S shortcut, Tab key inserts 2 spaces. Backend `PUT /api/files/write` with mtime-based conflict detection (409 response, overwrite confirm). `GET /api/files/mtime` lightweight endpoint for 5s polling — auto-reloads clean files, shows warning bar for dirty files. Guards: closeTab/hardRefresh/setFileTabView confirm on dirty, `beforeunload` prevents accidental navigation.
 
+## Recently Completed (cont. 24)
+- **2026-02-24**: File tree refresh button — ↻ in sidebar header (visible only in Files view via `.sb-action-files` CSS toggle). `ftRefresh()` clears `_ftTreeCache` + `_ftExpanded` and re-renders.
+- **2026-02-24**: Pane close layout fix — `removePane()` now clears inline `flex`/`width`/`height` on all remaining `.pane` and `.pane-stack` elements, so they revert to `flex:1` and evenly fill freed space (divider drag sets `flex:none` + px sizes which persisted after removal).
+- **2026-02-24**: Defensive `file-tab-active` sync — `showActiveTabOutput()` now also toggles `file-tab-active` class on pane element, ensuring input bar visibility is always correct after tab switches.
+
 ## Active Work
 None
 

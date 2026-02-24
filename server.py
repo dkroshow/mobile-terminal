@@ -947,6 +947,8 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   border-radius:6px; transition:all .15s; text-transform:uppercase; letter-spacing:0.3px; }
 .sb-view-tab.active { background:var(--bg); color:var(--text); }
 #sidebar.files-view .sb-action-sessions { display:none; }
+.sb-action-files { display:none; }
+#sidebar.files-view .sb-action-files { display:inline-flex; }
 
 /* File tree in sidebar (VS Code compact style) */
 .ft-tree { list-style:none; margin:0; padding:0; }
@@ -1105,6 +1107,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
     </div>
     <button id="sb-new-win-btn" class="sb-action-sessions" onclick="newWin()" title="New window">+</button>
     <button id="sb-expand-btn" class="sb-action-sessions" onclick="toggleSidebarExpand()" title="Toggle detail level">&#9656;</button>
+    <button id="sb-ft-refresh-btn" class="sb-action-files" onclick="ftRefresh()" title="Refresh file tree">&#8635;</button>
     <button id="collapse-btn" onclick="toggleSidebar()" title="Collapse sidebar">&laquo;</button>
   </div>
   <div id="sidebar-content"></div>
@@ -1398,6 +1401,11 @@ function unhideFtRoot(path) {
 }
 function saveFtRootOrder() {
   prefs.setItem('ft:root-order', JSON.stringify(_ftRootOrder));
+}
+function ftRefresh() {
+  _ftTreeCache = {};
+  _ftExpanded = {};
+  renderFileTree();
 }
 
 function renderFileTree() {
@@ -2470,6 +2478,10 @@ function removePane(paneId) {
     }
   }
   if (activePaneId === paneId) focusPane(panes[0].id);
+  // Reset inline sizes so remaining panes fill freed space (divider drag sets flex:none + px sizes)
+  document.querySelectorAll('.pane, .pane-stack').forEach(el => {
+    el.style.flex = ''; el.style.width = ''; el.style.height = '';
+  });
   updateLayout();
   renderSidebar();
   saveLayout();
@@ -2774,6 +2786,9 @@ function showActiveTabOutput(paneId) {
     const outEl = document.getElementById('tab-output-' + pane.activeTabId);
     if (outEl) outEl.style.display = '';
   }
+  // Ensure file-tab-active class matches active tab type
+  const at = pane.activeTabId && allTabs[pane.activeTabId];
+  paneEl.classList.toggle('file-tab-active', at && at.type === 'file');
 }
 
 // === Layout persistence ===
