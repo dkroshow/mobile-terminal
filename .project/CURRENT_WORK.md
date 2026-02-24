@@ -149,6 +149,9 @@
 - **2022-02-22**: File tree enhancements — hidden files/folders now shown (only `.git`, `__pycache__`, `node_modules`, `.DS_Store` excluded); markdown defaults to raw view; text size uses `--sb-name`/`--sb-detail`/`--sb-tiny` CSS vars (matches Sessions); drag reorder + HIDE/SHOW for root directories (persisted to `ft:root-order`, `ft:hidden-roots` prefs).
 - **2026-02-22**: Font rendering — added `text-rendering:optimizeLegibility`, `-moz-osx-font-smoothing:grayscale`, `font-feature-settings:'kern' 1`.
 
+## Recently Completed (cont. 23)
+- **2026-02-23**: File Editor with Auto-Refresh — file tabs now editable. Edit/View toggle in toolbar, monospace `<textarea>` editor, dirty state tracking (accent dot on tab + toolbar), Save button + Cmd/Ctrl+S shortcut, Tab key inserts 2 spaces. Backend `PUT /api/files/write` with mtime-based conflict detection (409 response, overwrite confirm). `GET /api/files/mtime` lightweight endpoint for 5s polling — auto-reloads clean files, shows warning bar for dirty files. Guards: closeTab/hardRefresh/setFileTabView confirm on dirty, `beforeunload` prevents accidental navigation.
+
 ## Active Work
 None
 

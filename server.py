@@ -1067,6 +1067,31 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .fb-reader-body th { background:var(--surface); font-weight:600; }
 .fb-reader-body img { max-width:100%; border-radius:8px; }
 .fb-reader-body hr { border:none; border-top:1px solid var(--border); margin:1.5em 0; }
+
+/* File editor */
+.file-editor-wrap { flex:1; display:flex; flex-direction:column; min-height:0; }
+.file-editor { flex:1; width:100%; margin:0; padding:12px 16px; border:none; outline:none;
+  background:transparent; color:#d4d4d4; font-size:var(--mono-size);
+  font-family:'SF Mono',ui-monospace,Menlo,monospace; white-space:pre-wrap;
+  word-break:break-word; line-height:1.5; resize:none; box-sizing:border-box; }
+.file-dirty-dot { width:6px; height:6px; border-radius:50%; background:var(--accent);
+  display:inline-block; margin-right:2px; flex-shrink:0; }
+.file-save-btn { padding:3px 10px; border:none; border-radius:4px; font-size:11px;
+  font-weight:600; font-family:inherit; cursor:pointer; transition:all .15s; }
+.file-save-btn.dirty { background:var(--accent); color:#fff; }
+.file-save-btn:not(.dirty) { background:var(--surface); color:var(--text3); }
+.file-save-btn.saving { opacity:0.5; pointer-events:none; }
+.file-edit-btn { padding:3px 10px; background:none; border:1px solid var(--border2);
+  border-radius:4px; font-size:11px; font-weight:600; font-family:inherit;
+  color:var(--text3); cursor:pointer; transition:all .15s; }
+.file-edit-btn.active { border-color:var(--accent); color:var(--accent); }
+.file-external-change { display:flex; align-items:center; gap:8px; padding:6px 12px;
+  background:rgba(217,119,87,0.12); border-bottom:1px solid var(--accent);
+  font-size:12px; color:var(--accent); }
+.file-external-change button { padding:2px 8px; background:var(--accent); color:#fff;
+  border:none; border-radius:4px; font-size:11px; font-weight:600; cursor:pointer;
+  font-family:inherit; }
+.pane-tab.file-dirty .pane-tab-dot { background:var(--accent) !important; opacity:1 !important; }
 </style>
 </head>
 <body>
@@ -1541,6 +1566,8 @@ function ftOpenFile(filePath, targetPaneId) {
     awaitingResponse: false, lastOutputChange: 0,
     pollInterval: null, ccStatus: null,
     fileContent: null, fileLoaded: false, fileRawView: true,
+    fileMtime: null, fileEditing: false, fileDirty: false,
+    fileSaving: false, fileMtimeInterval: null,
   };
   pane.tabIds.push(id);
   pane.activeTabId = id;
@@ -1576,8 +1603,12 @@ async function loadFileTabContent(tabId) {
     }
     const data = await r.json();
     state.fileContent = data.content;
+    state.fileMtime = data.mtime;
     state.fileLoaded = true;
+    state.fileDirty = false;
+    state.fileEditing = false;
     renderFileTabFormatted(tabId);
+    startMtimePolling(tabId);
   } catch(e) {
     state.fileContent = null; state.fileLoaded = true;
     renderFileTabOutput(tabId, '<div style="padding:24px;color:var(--text3)">Error loading file</div>');
@@ -1724,27 +1755,80 @@ function renderFileTabFormatted(tabId) {
   if (!tab || !state || state.fileContent == null) return;
   const md = isMarkdown(tab.fileName);
   let bodyHtml;
-  if (md && !state.fileRawView) {
-    // Markdown formatted view
+  if (state.fileEditing) {
+    // Edit mode — textarea
+    bodyHtml = '<div class="file-editor-wrap">'
+      + '<textarea class="file-editor" id="file-editor-' + tabId + '" spellcheck="false">' + esc(state.fileContent) + '</textarea>'
+      + '</div>';
+  } else if (md && !state.fileRawView) {
     bodyHtml = '<div class="fb-reader"><div class="fb-reader-body">' + mdFile(state.fileContent) + '</div></div>';
   } else if (md && state.fileRawView) {
-    // Markdown raw view with md-specific highlighting
     bodyHtml = '<pre class="md-raw">' + highlightMdRaw(state.fileContent) + '</pre>';
   } else {
-    // Code / text files — syntax highlighted
     const ext = fileExt(tab.fileName);
     bodyHtml = '<pre class="code-view">' + highlightCode(state.fileContent, ext) + '</pre>';
   }
+  // Toolbar
   let toolbar = '<div class="file-tab-toolbar">'
-    + '<span class="file-tab-path" title="' + esc(tab.filePath) + '">' + esc(tab.filePath) + '</span>';
-  if (md) {
+    + '<span class="file-tab-path" title="' + esc(tab.filePath) + '">'
+    + (state.fileDirty ? '<span class="file-dirty-dot"></span>' : '')
+    + esc(tab.filePath) + '</span>';
+  // View toggle (only in view mode for markdown)
+  if (!state.fileEditing && md) {
     toolbar += '<div class="file-tab-toggle">'
       + '<button class="' + (state.fileRawView ? '' : 'active') + '" onclick="setFileTabView(' + tabId + ',false)">Formatted</button>'
       + '<button class="' + (state.fileRawView ? 'active' : '') + '" onclick="setFileTabView(' + tabId + ',true)">Raw</button>'
       + '</div>';
   }
+  // Save button (when editing)
+  if (state.fileEditing) {
+    toolbar += '<button class="file-save-btn' + (state.fileDirty ? ' dirty' : '') + (state.fileSaving ? ' saving' : '')
+      + '" onclick="fileSave(' + tabId + ')">' + (state.fileSaving ? 'Saving...' : 'Save') + '</button>';
+  }
+  // Edit/View toggle
+  toolbar += '<button class="file-edit-btn' + (state.fileEditing ? ' active' : '')
+    + '" onclick="fileToggleEdit(' + tabId + ')">' + (state.fileEditing ? 'View' : 'Edit') + '</button>';
   toolbar += '</div>';
-  renderFileTabOutput(tabId, toolbar + bodyHtml);
+  // External change warning bar
+  let warningBar = '';
+  if (state._externalChange) {
+    warningBar = '<div class="file-external-change">'
+      + '<span>File changed on disk</span>'
+      + '<button onclick="fileReloadFromDisk(' + tabId + ')">Reload</button>'
+      + '<button onclick="fileDismissWarning(' + tabId + ')" style="background:var(--surface);color:var(--text3)">Dismiss</button>'
+      + '</div>';
+  }
+  renderFileTabOutput(tabId, toolbar + warningBar + bodyHtml);
+  // Attach event handlers for editor textarea
+  if (state.fileEditing) {
+    const ta = document.getElementById('file-editor-' + tabId);
+    if (ta) {
+      ta.addEventListener('input', function() {
+        state.fileContent = ta.value;
+        state.fileDirty = true;
+        updateFileTabDirtyDot(tabId);
+        // Update save button
+        const saveBtn = ta.closest('.pane-output').querySelector('.file-save-btn');
+        if (saveBtn && !saveBtn.classList.contains('dirty')) saveBtn.classList.add('dirty');
+      });
+      ta.addEventListener('keydown', function(e) {
+        if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+          e.preventDefault();
+          fileSave(tabId);
+        }
+        // Tab key inserts tab character
+        if (e.key === 'Tab' && !e.metaKey && !e.ctrlKey) {
+          e.preventDefault();
+          const start = ta.selectionStart;
+          const end = ta.selectionEnd;
+          ta.value = ta.value.substring(0, start) + '  ' + ta.value.substring(end);
+          ta.selectionStart = ta.selectionEnd = start + 2;
+          ta.dispatchEvent(new Event('input'));
+        }
+      });
+      ta.focus();
+    }
+  }
 }
 
 function renderFileTabOutput(tabId, html) {
@@ -1755,8 +1839,178 @@ function renderFileTabOutput(tabId, html) {
 function setFileTabView(tabId, raw) {
   const state = tabStates[tabId];
   if (!state) return;
+  if (state.fileDirty) {
+    if (!confirm('Discard unsaved changes?')) return;
+  }
+  if (state.fileEditing) {
+    state.fileEditing = false;
+    state.fileDirty = false;
+    updateFileTabDirtyDot(tabId);
+  }
   state.fileRawView = raw;
   renderFileTabFormatted(tabId);
+}
+
+function fileToggleEdit(tabId) {
+  const state = tabStates[tabId];
+  if (!state) return;
+  if (state.fileEditing) {
+    // Exit edit mode
+    if (state.fileDirty && !confirm('Discard unsaved changes?')) return;
+    state.fileEditing = false;
+    state.fileDirty = false;
+    updateFileTabDirtyDot(tabId);
+  } else {
+    // Enter edit mode
+    state.fileEditing = true;
+  }
+  renderFileTabFormatted(tabId);
+}
+
+async function fileSave(tabId) {
+  const tab = allTabs[tabId];
+  const state = tabStates[tabId];
+  if (!tab || !state || !state.fileEditing || state.fileSaving) return;
+  state.fileSaving = true;
+  // Update save button UI
+  const outEl = document.getElementById('tab-output-' + tabId);
+  const saveBtn = outEl && outEl.querySelector('.file-save-btn');
+  if (saveBtn) { saveBtn.textContent = 'Saving...'; saveBtn.classList.add('saving'); }
+  try {
+    const r = await fetch('/api/files/write', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ path: tab.filePath, content: state.fileContent, mtime: state.fileMtime })
+    });
+    if (r.status === 409) {
+      const err = await r.json();
+      if (confirm('File was modified on disk. Overwrite anyway?')) {
+        // Retry without mtime check
+        const r2 = await fetch('/api/files/write', {
+          method: 'PUT',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ path: tab.filePath, content: state.fileContent })
+        });
+        if (r2.ok) {
+          const d2 = await r2.json();
+          state.fileMtime = d2.mtime;
+          state.fileDirty = false;
+          state._externalChange = false;
+          updateFileTabDirtyDot(tabId);
+          if (saveBtn) { saveBtn.textContent = 'Save'; saveBtn.classList.remove('saving','dirty'); }
+        }
+      }
+    } else if (r.ok) {
+      const data = await r.json();
+      state.fileMtime = data.mtime;
+      state.fileDirty = false;
+      state._externalChange = false;
+      updateFileTabDirtyDot(tabId);
+      if (saveBtn) { saveBtn.textContent = 'Save'; saveBtn.classList.remove('saving','dirty'); }
+      // Remove warning bar if present
+      const warn = outEl && outEl.querySelector('.file-external-change');
+      if (warn) warn.remove();
+    } else {
+      const err = await r.json().catch(() => ({}));
+      alert('Save failed: ' + (err.detail || 'Unknown error'));
+    }
+  } catch(e) {
+    alert('Save failed: network error');
+  }
+  state.fileSaving = false;
+  if (saveBtn) { saveBtn.textContent = 'Save'; saveBtn.classList.remove('saving'); }
+}
+
+function updateFileTabDirtyDot(tabId) {
+  const state = tabStates[tabId];
+  // Update pane tab dot
+  const tabEl = document.querySelector('[data-tab-id="' + tabId + '"].pane-tab');
+  if (tabEl) tabEl.classList.toggle('file-dirty', state && state.fileDirty);
+  // Update toolbar dirty dot
+  const outEl = document.getElementById('tab-output-' + tabId);
+  if (outEl) {
+    const dot = outEl.querySelector('.file-dirty-dot');
+    if (state && state.fileDirty && !dot) {
+      const pathEl = outEl.querySelector('.file-tab-path');
+      if (pathEl) pathEl.insertAdjacentHTML('afterbegin', '<span class="file-dirty-dot"></span>');
+    } else if ((!state || !state.fileDirty) && dot) {
+      dot.remove();
+    }
+  }
+}
+
+function startMtimePolling(tabId) {
+  const state = tabStates[tabId];
+  if (!state) return;
+  stopMtimePolling(tabId);
+  state.fileMtimeInterval = setInterval(function() { checkFileMtime(tabId); }, 5000);
+}
+
+function stopMtimePolling(tabId) {
+  const state = tabStates[tabId];
+  if (!state || !state.fileMtimeInterval) return;
+  clearInterval(state.fileMtimeInterval);
+  state.fileMtimeInterval = null;
+}
+
+async function checkFileMtime(tabId) {
+  const tab = allTabs[tabId];
+  const state = tabStates[tabId];
+  if (!tab || !state || tab.type !== 'file' || state.fileMtime == null) return;
+  try {
+    const r = await fetch('/api/files/mtime?path=' + encodeURIComponent(tab.filePath));
+    if (!r.ok) return;
+    const data = await r.json();
+    if (Math.abs(data.mtime - state.fileMtime) > 0.01) {
+      if (state.fileDirty || state.fileEditing) {
+        // Show warning bar
+        state._externalChange = true;
+        const outEl = document.getElementById('tab-output-' + tabId);
+        if (outEl && !outEl.querySelector('.file-external-change')) {
+          const toolbar = outEl.querySelector('.file-tab-toolbar');
+          if (toolbar) {
+            toolbar.insertAdjacentHTML('afterend',
+              '<div class="file-external-change">'
+              + '<span>File changed on disk</span>'
+              + '<button onclick="fileReloadFromDisk(' + tabId + ')">Reload</button>'
+              + '<button onclick="fileDismissWarning(' + tabId + ')" style="background:var(--surface);color:var(--text3)">Dismiss</button>'
+              + '</div>');
+          }
+        }
+      } else {
+        // Auto-reload
+        fileReloadFromDisk(tabId);
+      }
+    }
+  } catch(e) {}
+}
+
+async function fileReloadFromDisk(tabId) {
+  const tab = allTabs[tabId];
+  const state = tabStates[tabId];
+  if (!tab || !state) return;
+  state._externalChange = false;
+  state.fileDirty = false;
+  state.fileEditing = false;
+  updateFileTabDirtyDot(tabId);
+  try {
+    const r = await fetch('/api/files/read?path=' + encodeURIComponent(tab.filePath));
+    if (!r.ok) return;
+    const data = await r.json();
+    state.fileContent = data.content;
+    state.fileMtime = data.mtime;
+    renderFileTabFormatted(tabId);
+  } catch(e) {}
+}
+
+function fileDismissWarning(tabId) {
+  const state = tabStates[tabId];
+  if (state) state._externalChange = false;
+  const outEl = document.getElementById('tab-output-' + tabId);
+  if (outEl) {
+    const warn = outEl.querySelector('.file-external-change');
+    if (warn) warn.remove();
+  }
 }
 
 function statusLabel(cc_status) {
@@ -2280,7 +2534,13 @@ function createTab(session, windowIndex, windowName, targetPaneId) {
 }
 
 function closeTab(tabId, skipRender) {
+  // Warn if file tab has unsaved changes
+  const _cState = tabStates[tabId];
+  if (_cState && _cState.fileDirty) {
+    if (!confirm('This file has unsaved changes. Close anyway?')) return;
+  }
   stopTabPolling(tabId);
+  stopMtimePolling(tabId);
   // Find which pane has this tab
   let pane = null;
   for (const p of panes) {
@@ -3253,7 +3513,14 @@ async function hardRefresh(paneId) {
   const tab = allTabs[tabId]; const state = tabStates[tabId];
   if (!tab || !state) return;
   // File tab: re-fetch file content
-  if (tab.type === 'file') { state.fileLoaded = false; loadFileTabContent(tabId); return; }
+  if (tab.type === 'file') {
+    if (state.fileDirty && !confirm('Discard unsaved changes and reload?')) return;
+    state.fileLoaded = false; state.fileEditing = false; state.fileDirty = false;
+    state._externalChange = false;
+    updateFileTabDirtyDot(tabId);
+    loadFileTabContent(tabId);
+    return;
+  }
   // Clear all cached state
   state.last = null; state.rawContent = null; state.pendingMsg = null;
   state.awaitingResponse = false;
@@ -4079,6 +4346,11 @@ document.addEventListener('visibilitychange', () => {
     loadDashboard();
   }
 });
+window.addEventListener('beforeunload', function(e) {
+  for (const tid in tabStates) {
+    if (tabStates[tid].fileDirty) { e.preventDefault(); return; }
+  }
+});
 init();
 </script>
 </body>
@@ -4358,7 +4630,51 @@ async def api_read_file(path: str):
     except (OSError, PermissionError):
         return JSONResponse({"detail": "Cannot read file"}, status_code=403)
     name = os.path.basename(resolved)
-    return JSONResponse({"path": resolved, "name": name, "content": content, "size": size})
+    mtime = os.path.getmtime(resolved)
+    return JSONResponse({"path": resolved, "name": name, "content": content, "size": size, "mtime": mtime})
+
+
+@app.get("/api/files/mtime")
+async def api_file_mtime(path: str):
+    roots = _get_session_cwds()
+    resolved = os.path.realpath(path)
+    if not _is_path_allowed(resolved, roots):
+        return JSONResponse({"detail": "Access denied"}, status_code=403)
+    if not os.path.isfile(resolved):
+        return JSONResponse({"detail": "File not found"}, status_code=404)
+    try:
+        mtime = os.path.getmtime(resolved)
+    except OSError:
+        return JSONResponse({"detail": "Cannot access file"}, status_code=403)
+    return JSONResponse({"path": resolved, "mtime": mtime})
+
+
+@app.put("/api/files/write")
+async def api_write_file(body: dict):
+    file_path = body.get("path", "")
+    content = body.get("content", "")
+    expected_mtime = body.get("mtime")  # optional conflict detection
+    roots = _get_session_cwds()
+    resolved = os.path.realpath(file_path)
+    if not _is_path_allowed(resolved, roots):
+        return JSONResponse({"detail": "Access denied: path outside session directories"}, status_code=403)
+    if not os.path.exists(resolved):
+        return JSONResponse({"detail": "File not found"}, status_code=404)
+    # Conflict detection: if caller provided mtime, check it matches
+    if expected_mtime is not None:
+        try:
+            current_mtime = os.path.getmtime(resolved)
+        except OSError:
+            return JSONResponse({"detail": "Cannot access file"}, status_code=403)
+        if abs(current_mtime - expected_mtime) > 0.01:
+            return JSONResponse({"detail": "File modified on disk since last read", "mtime": current_mtime}, status_code=409)
+    try:
+        with open(resolved, 'w', encoding='utf-8') as f:
+            f.write(content)
+        new_mtime = os.path.getmtime(resolved)
+    except (OSError, PermissionError) as e:
+        return JSONResponse({"detail": "Cannot write file: " + str(e)}, status_code=403)
+    return JSONResponse({"ok": True, "mtime": new_mtime})
 
 
 if __name__ == "__main__":

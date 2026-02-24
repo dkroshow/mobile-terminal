@@ -50,6 +50,10 @@ Working and deployed as a macOS LaunchAgent (`com.kd.mobile-terminal`). Runs on 
 | PUT | `/api/sessions/{name}` | Rename session `{"name": "..."}` |
 | GET | `/api/pane-info` | Get cwd, PID, session, window of active pane |
 | GET | `/api/dashboard` | All sessions/windows with CC status (sidebar) |
+| GET | `/api/files` | List directory contents (file tree) |
+| GET | `/api/files/read` | Read file content + mtime |
+| GET | `/api/files/mtime` | Lightweight mtime check (for polling) |
+| PUT | `/api/files/write` | Write file `{path, content, mtime}` with conflict detection |
 
 ### Config (env vars)
 - `TMUX_SESSION` — session name (default: `mobile`)
