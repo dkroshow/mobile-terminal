@@ -431,7 +431,7 @@ HTML = """\
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --sidebar-w: 300px;
-  --text-size: 15px; --code-size: 12.5px; --mono-size: 12.5px;
+  --text-size: 15px; --code-size: 13px; --mono-size: 13px;
   --turn-pad-v: 16px; --turn-pad-h: 18px; --turn-gap: 12px;
   --turn-radius: 18px; --line-h: 1.7;
   --sb-name: 15px; --sb-detail: 13px; --sb-tiny: 12px;
@@ -991,9 +991,9 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .ft-children { list-style:none; margin:0; padding:0; }
 
 /* Raw markdown syntax highlighting */
-.md-raw { margin:0; padding:12px 16px; color:var(--text); font-size:var(--mono-size);
-  font-family:'SF Mono',ui-monospace,Menlo,monospace; white-space:pre-wrap;
-  word-break:break-word; line-height:1.5; counter-reset:line; }
+.md-raw { margin:0; padding:16px 14px; color:var(--text); font-size:var(--mono-size);
+  font-family:'SF Mono',ui-monospace,Menlo,Consolas,monospace; white-space:pre-wrap;
+  word-break:break-word; line-height:1.6; counter-reset:line; }
 .md-raw .md-h { color:#569cd6; font-weight:bold; }
 .md-raw .md-hm { color:#569cd6; opacity:0.6; }
 .md-raw .md-bold { color:#ce9178; font-weight:bold; }
@@ -1015,9 +1015,9 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .md-raw .md-hr { color:#808080; }
 
 /* Code file syntax highlighting */
-.code-view { margin:0; padding:12px 16px; color:#d4d4d4; font-size:var(--mono-size);
-  font-family:'SF Mono',ui-monospace,Menlo,monospace; white-space:pre-wrap;
-  word-break:break-word; line-height:1.5; }
+.code-view { margin:0; padding:16px 14px; color:#d4d4d4; font-size:var(--mono-size);
+  font-family:'SF Mono',ui-monospace,Menlo,Consolas,monospace; white-space:pre-wrap;
+  word-break:break-word; line-height:1.6; }
 .code-view .code-kw { color:#569cd6; }
 .code-view .code-builtin { color:#4ec9b0; }
 .code-view .code-string { color:#ce9178; }
@@ -1045,7 +1045,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .fb-reader { max-width:700px; margin:0 auto; padding:16px 20px 40px; }
 .fb-reader-title { font-size:15px; font-weight:600; color:var(--text3);
   margin-bottom:16px; padding-bottom:10px; border-bottom:1px solid var(--border); }
-.fb-reader-body { color:var(--text); font-size:var(--fs-text); line-height:1.65; }
+.fb-reader-body { color:var(--text); font-size:var(--text-size); line-height:1.65; }
 .fb-reader-body h1,.fb-reader-body h2,.fb-reader-body h3,
 .fb-reader-body h4,.fb-reader-body h5,.fb-reader-body h6 {
   color:var(--text); margin:1.2em 0 0.5em; font-weight:600; }
@@ -1128,7 +1128,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
       <button class="topbar-btn" id="add-pane-btn" onclick="addPane()">+ Pane</button>
       <button class="topbar-btn" id="size-btn" onclick="cycleTextSize()">A</button>
       <button class="topbar-btn" id="view-btn" onclick="toggleRaw()">
-        <span>View: </span><span id="view-label">Clean</span>
+        <span>View: </span><span id="view-label">Raw</span>
       </button>
     </div>
   </div>
@@ -2218,10 +2218,14 @@ function parseCCTurns(text) {
     }
   }
   // Find last ❯ line index — if not a realPrompt, it's the user's just-submitted input
-  // (not yet acknowledged by CC with ⏺) and should be excluded from assistant turns
+  // (not yet acknowledged by CC with ⏺). Truncate lines there so the user's pending
+  // input (which may span multiple lines) never leaks into assistant turns.
   let lastPromptIdx = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
     if (/^\\u276f/.test(lines[i].replace(/\\u00a0/g, ' '))) { lastPromptIdx = i; break; }
+  }
+  if (lastPromptIdx >= 0 && !realPrompts.has(lastPromptIdx)) {
+    lines = lines.slice(0, lastPromptIdx);
   }
   const turns = []; let cur = null, inTool = false, sawStatus = false;
   for (let li = 0; li < lines.length; li++) {
@@ -2242,12 +2246,8 @@ function parseCCTurns(text) {
       if (msg.startsWith('/')) { cur = null; inTool = false; sawStatus = false; continue; }
       cur = { role: 'user', lines: msg ? [msg] : [] }; inTool = false; sawStatus = false; continue;
     }
-    // Non-prompt ❯ line (menu selection OR unacknowledged user input)
+    // Non-prompt ❯ line (menu selection) — treat as regular text, strip the ❯
     if (/^\\u276f/.test(raw) && !realPrompts.has(li)) {
-      // Last ❯ line that isn't a real prompt = user's just-submitted input (CC hasn't
-      // responded with ⏺ yet). Skip it — pendingMsg handles display.
-      if (li === lastPromptIdx) continue;
-      // Earlier non-prompt ❯ lines are menu selections — add to current turn
       const menuText = t.replace(/^\\u276f\\s*/, '').trim();
       if (cur && !inTool && menuText) cur.lines.push(menuText);
       continue;
@@ -2285,42 +2285,44 @@ function parseCCTurns(text) {
 
 // === Render output into target element ===
 function renderOutput(raw, targetEl, state, tabId) {
+  // Process awaitingResponse/pendingMsg regardless of view mode (queue, notifications depend on this)
+  const clean = cleanTerminal(raw);
+  const wasAwaiting = state.awaitingResponse;
+  if (state.awaitingResponse) {
+    const elapsed = Date.now() - state.pendingTime;
+    if (elapsed > 3000 && isIdle(clean)) state.awaitingResponse = false;
+    const staleAge = state.lastOutputChange > 0 ? Date.now() - state.lastOutputChange : 0;
+    if (elapsed > 5000 && staleAge > 30000) state.awaitingResponse = false;
+    if (elapsed > 180000) state.awaitingResponse = false;
+  }
+  if (wasAwaiting && !state.awaitingResponse && tabId) {
+    onQueueTaskCompleted(tabId);
+    notifyDone(tabId);
+  }
   if (state.rawMode) {
     targetEl.className = 'pane-output raw';
     targetEl.textContent = raw;
     return;
   }
   targetEl.className = 'pane-output chat';
-  const clean = cleanTerminal(raw);
   let html = '';
   if (isClaudeCode(clean)) {
     const turns = parseCCTurns(clean);
     if (state.pendingMsg) {
       const snippet = state.pendingMsg.substring(0, 20);
-      // Check all turns (user and assistant) — submitted text may appear in assistant turn
-      // before CC responds (parser absorbs non-realPrompt ❯ lines into current turn)
-      const anyTurnMatch = turns.some(t => t.lines.join(' ').includes(snippet));
-      // Also check raw text for ❯ followed by our text (most reliable)
-      const rawMatch = clean.includes(snippet);
-      if (anyTurnMatch || rawMatch) state.pendingMsg = null;
+      const userTurns = turns.filter(t => t.role === 'user');
+      const inUserTurn = userTurns.some(u => u.lines.join(' ').includes(snippet));
+      if (inUserTurn) state.pendingMsg = null;
       // Safety timeout: 10s max for pendingMsg display
       else if (state.pendingTime && (Date.now() - state.pendingTime) > 10000)
         state.pendingMsg = null;
-    }
-    const wasAwaiting = state.awaitingResponse;
-    if (state.awaitingResponse) {
-      const elapsed = Date.now() - state.pendingTime;
-      if (elapsed > 3000 && isIdle(clean)) state.awaitingResponse = false;
-      // Staleness fallback for interactive menus (status bar still shows "esc to interrupt"
-      // but CC is actually waiting for input). Only fire after 30s to avoid false positives
-      // during extended thinking or long tool executions.
-      const staleAge = state.lastOutputChange > 0 ? Date.now() - state.lastOutputChange : 0;
-      if (elapsed > 5000 && staleAge > 30000) state.awaitingResponse = false;
-      if (elapsed > 180000) state.awaitingResponse = false;
-    }
-    if (wasAwaiting && !state.awaitingResponse && tabId) {
-      onQueueTaskCompleted(tabId);
-      notifyDone(tabId);
+      // Scrub: if pending text leaked into the last assistant turn, strip those lines
+      if (state.pendingMsg && turns.length > 0) {
+        const last = turns[turns.length - 1];
+        if (last.role === 'assistant') {
+          last.lines = last.lines.filter(l => !l.includes(snippet));
+        }
+      }
     }
     let lastRole = '';
     for (const t of turns) {
@@ -2532,7 +2534,7 @@ function createTab(session, windowIndex, windowName, targetPaneId) {
   const id = _nextTabId++;
   allTabs[id] = { session, windowIndex, windowName };
   tabStates[id] = {
-    rawContent: '', last: '', rawMode: false,
+    rawContent: '', last: '', rawMode: true,
     pendingMsg: null, pendingTime: 0,
     awaitingResponse: false, lastOutputChange: 0,
     pollInterval: null, ccStatus: null,
@@ -2627,6 +2629,14 @@ function focusTab(tabId) {
   for (const p of panes) {
     if (p.tabIds.includes(tabId)) {
       const tabChanged = p.activeTabId !== tabId;
+      // Save draft text from old tab's textarea before switching
+      if (tabChanged && p.activeTabId && tabStates[p.activeTabId]) {
+        const paneEl = document.getElementById('pane-' + p.id);
+        const ta = paneEl && paneEl.querySelector('.pane-input textarea');
+        tabStates[p.activeTabId].draft = ta ? ta.value : '';
+        // Also save global textarea draft
+        if (M) tabStates[p.activeTabId].globalDraft = M.value;
+      }
       p.activeTabId = tabId;
       focusPane(p.id);
       if (tabChanged && _sidebarView === 'sessions') renderSidebar();
@@ -2651,6 +2661,13 @@ function focusTab(tabId) {
         }
       } else if (state) {
         document.getElementById('view-label').textContent = state.rawMode ? 'Raw' : 'Clean';
+      }
+      // Restore draft text for new tab
+      if (tabChanged && state) {
+        const paneEl = document.getElementById('pane-' + p.id);
+        const ta = paneEl && paneEl.querySelector('.pane-input textarea');
+        if (ta) { ta.value = state.draft || ''; ta.style.height = 'auto'; ta.dispatchEvent(new Event('input')); }
+        if (M) { M.value = state.globalDraft || ''; M.style.height = 'auto'; M.dispatchEvent(new Event('input')); }
       }
       saveLayout();
       return;
@@ -2814,7 +2831,7 @@ function savePaneData(p) {
       if (!t) return null;
       if (t.type === 'file') return { type: 'file', filePath: t.filePath, fileName: t.fileName };
       const st = tabStates[tid];
-      return { session: t.session, windowIndex: t.windowIndex, windowName: t.windowName, rawMode: st ? st.rawMode : false };
+      return { session: t.session, windowIndex: t.windowIndex, windowName: t.windowName, rawMode: st ? st.rawMode : true };
     }).filter(Boolean),
     activeTab: p.activeTabId ? (() => {
       const t = allTabs[p.activeTabId];
@@ -3413,11 +3430,11 @@ async function tryDispatchNext(tabId) {
 }
 
 function notifyDone(tabId) {
-  const tab = openTabs.find(t => t.tabId === tabId);
+  const tab = allTabs[tabId];
   if (!tab) return;
   // Browser notification (desktop, when tab not visible)
   if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && document.hidden) {
-    try { new Notification('Claude Code done', { body: (tab.windowName || tab.tabId) + ' finished' }); } catch(e) {}
+    try { new Notification('Claude Code done', { body: (tab.windowName || tabId) + ' finished' }); } catch(e) {}
   }
   // Server notification (macOS osascript + ntfy)
   try {
@@ -3463,6 +3480,8 @@ function updateLayout() {
   document.querySelectorAll('.pane-input').forEach(pi => {
     pi.classList.toggle('visible', multiPane);
   });
+  // Ensure all panes have tab bars rendered (empty panes need close button)
+  for (const p of panes) renderPaneTabs(p.id);
   updateDividers();
 }
 
@@ -3498,6 +3517,7 @@ function setupDivider(div, dir) {
       prevSize = prevEl.getBoundingClientRect().height;
       nextSize = nextEl.getBoundingClientRect().height;
     }
+    // Use px during drag for smooth feel
     prevEl.style.flex = 'none'; nextEl.style.flex = 'none';
     if (dir === 'col') {
       prevEl.style.width = prevSize + 'px'; nextEl.style.width = nextSize + 'px';
@@ -3515,6 +3535,22 @@ function setupDivider(div, dir) {
       div.classList.remove('active');
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', onUp);
+      // Convert px to % so panes scale with window resize
+      if (prevEl && nextEl) {
+        const parent = prevEl.parentElement;
+        if (parent) {
+          const total = dir === 'col' ? parent.clientWidth : parent.clientHeight;
+          const pPx = dir === 'col' ? prevEl.getBoundingClientRect().width : prevEl.getBoundingClientRect().height;
+          const nPx = dir === 'col' ? nextEl.getBoundingClientRect().width : nextEl.getBoundingClientRect().height;
+          const pPct = (pPx / total * 100).toFixed(2) + '%';
+          const nPct = (nPx / total * 100).toFixed(2) + '%';
+          if (dir === 'col') {
+            prevEl.style.width = pPct; nextEl.style.width = nPct;
+          } else {
+            prevEl.style.height = pPct; nextEl.style.height = nPct;
+          }
+        }
+      }
     }
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
@@ -3739,10 +3775,10 @@ function toggleRaw() {
 
 // === Text size ===
 const TEXT_SIZES = [
-  { label: 'A--', text: '11px', code: '10px', mono: '10px', padV: '6px', padH: '8px', gap: '3px', radius: '10px', lineH: '1.4', sbName: '11px', sbDetail: '10px', sbTiny: '9.5px' },
+  { label: 'A--', text: '11px', code: '9.5px', mono: '9.5px', padV: '6px', padH: '8px', gap: '3px', radius: '10px', lineH: '1.4', sbName: '11px', sbDetail: '10px', sbTiny: '9.5px' },
   { label: 'A-',  text: '13px', code: '11px', mono: '11px', padV: '8px', padH: '12px', gap: '6px', radius: '14px', lineH: '1.55', sbName: '13px', sbDetail: '11.5px', sbTiny: '11px' },
-  { label: 'A',   text: '15px', code: '12.5px', mono: '12.5px', padV: '16px', padH: '18px', gap: '12px', radius: '18px', lineH: '1.7', sbName: '15px', sbDetail: '13px', sbTiny: '12px' },
-  { label: 'A+',  text: '17px', code: '14px', mono: '14px', padV: '18px', padH: '20px', gap: '14px', radius: '20px', lineH: '1.8', sbName: '17px', sbDetail: '15px', sbTiny: '13px' },
+  { label: 'A',   text: '15px', code: '13px', mono: '13px', padV: '16px', padH: '18px', gap: '12px', radius: '18px', lineH: '1.7', sbName: '15px', sbDetail: '13px', sbTiny: '12px' },
+  { label: 'A+',  text: '17px', code: '15px', mono: '15px', padV: '18px', padH: '20px', gap: '14px', radius: '20px', lineH: '1.8', sbName: '17px', sbDetail: '15px', sbTiny: '13px' },
 ];
 let _textSizeIdx = 2;
 function applyTextSize(idx) {
@@ -4253,12 +4289,12 @@ function restorePaneTabs(paneId, paneData) {
       ftOpenFile(t.filePath, paneId);
     } else if (windowExists(t.session, t.windowIndex)) {
       createTab(t.session, t.windowIndex, t.windowName, paneId);
-      // Restore rawMode if saved
-      if (t.rawMode) {
+      // Restore saved rawMode (default is true, so restore false when user chose Clean)
+      if (t.rawMode === false) {
         const pane = panes.find(p => p.id === paneId);
         if (pane) {
           const tid = pane.tabIds[pane.tabIds.length - 1];
-          if (tid != null && tabStates[tid]) tabStates[tid].rawMode = true;
+          if (tid != null && tabStates[tid]) tabStates[tid].rawMode = false;
         }
       }
     }
@@ -4310,6 +4346,24 @@ function restoreLayout() {
         const paneId = createPane();
         if (!paneId) break;
         restorePaneTabs(paneId, item);
+      }
+    }
+    // Remove empty panes left over when saved tabs no longer exist
+    for (let i = panes.length - 1; i >= 0; i--) {
+      if (panes[i].tabIds.length === 0 && panes.length > 1) {
+        const el = document.getElementById('pane-' + panes[i].id);
+        if (el) {
+          const stack = el.parentElement;
+          el.remove();
+          if (stack && stack.classList.contains('pane-stack')) {
+            const remaining = stack.querySelectorAll('.pane');
+            if (remaining.length <= 1) {
+              if (remaining.length === 1) stack.parentElement.insertBefore(remaining[0], stack);
+              stack.remove();
+            }
+          }
+        }
+        panes.splice(i, 1);
       }
     }
     _restoringLayout = false;

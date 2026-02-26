@@ -161,6 +161,15 @@
 - **2026-02-24**: Fix submitted prompt appearing in Claude's last response — `parseCCTurns()` was absorbing unacknowledged `❯` lines (user's just-submitted text before CC responds with `⏺`) into the current assistant turn. Now the last `❯` line that isn't a `realPrompt` is skipped (pendingMsg handles display). Also fixed `pendingMsg` clearing: now checks all turns + raw terminal text (was only checking user turns, missing text absorbed into assistant turns).
 - **2026-02-24**: Raw/Clean view persistence — `rawMode` per-tab now saved in layout data (`savePaneData`) and restored on browser refresh (`restorePaneTabs`). Previously only persisted within a session (in-memory `tabStates`), lost on page reload.
 
+## Recently Completed (cont. 26)
+- **2026-02-26**: Fix prompt text leaking into Claude's last response (3 layers) — `parseCCTurns()` truncates lines at last unacknowledged `❯`; defensive scrub strips pendingMsg text from last assistant turn; pendingMsg only cleared on user-turn match (not raw text match which was too aggressive)
+- **2026-02-26**: Fix empty pane can't be closed — `restoreLayout()` cleans up panes with no valid tabs; `updateLayout()` renders tab bars for all panes (including empty ones) so close button always appears
+- **2026-02-26**: Fix queue not dispatching — `awaitingResponse`/`onQueueTaskCompleted`/`notifyDone` logic was inside `isClaudeCode` block and after rawMode early return; moved to top of `renderOutput` so it runs in all view modes. Fixed `notifyDone` crash (referenced undefined `openTabs` instead of `allTabs`)
+- **2026-02-26**: Per-tab draft text — textarea content saved to `tabStates[id].draft`/`globalDraft` on tab switch, restored in `focusTab`
+- **2026-02-26**: Pane dividers scale with window resize — divider drag converts px to % on pointerup so panes maintain proportional sizes
+- **2026-02-26**: Text size alignment — mono/code sizes step down one tier from text size; file viewer CSS (`.code-view`, `.md-raw`) aligned with terminal raw (same font-family, line-height, padding); `.fb-reader-body` fixed from undefined `--fs-text` to `--text-size`
+- **2026-02-26**: Default view is Raw — new terminal tabs default to `rawMode: true`; per-tab view persists across tab switches and browser refreshes
+
 ## Active Work
 None
 
