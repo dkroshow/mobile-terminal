@@ -3626,6 +3626,9 @@ async function pollTab(tabId) {
       state.last = d.output; state.rawContent = d.output;
       const outEl = document.getElementById('tab-output-' + tabId);
       if (!outEl) return;
+      // Skip DOM update while user is selecting text (prevents selection jumping)
+      const sel = window.getSelection();
+      if (sel && sel.type === 'Range' && outEl.contains(sel.anchorNode)) return;
       const atBottom = outEl.scrollHeight - outEl.scrollTop - outEl.clientHeight < 80;
       renderOutput(d.output, outEl, state, tabId);
       if (atBottom) outEl.scrollTop = outEl.scrollHeight;

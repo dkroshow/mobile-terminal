@@ -170,6 +170,9 @@
 - **2026-02-26**: Text size alignment — mono/code sizes step down one tier from text size; file viewer CSS (`.code-view`, `.md-raw`) aligned with terminal raw (same font-family, line-height, padding); `.fb-reader-body` fixed from undefined `--fs-text` to `--text-size`
 - **2026-02-26**: Default view is Raw — new terminal tabs default to `rawMode: true`; per-tab view persists across tab switches and browser refreshes
 
+## Recently Completed (cont. 27)
+- **2026-02-27**: Fix text selection jumping in Raw/Clean view — 1s poll was replacing DOM content while user was selecting text. Added `window.getSelection()` guard in `pollTab()` to skip `renderOutput()` when an active Range selection exists inside the output element. State still updates in background; next poll after selection release renders latest content.
+
 ## Active Work
 None
 
