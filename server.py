@@ -1841,9 +1841,8 @@ function ftOpenFile(filePath, targetPaneId) {
     fileSaving: false, fileMtimeInterval: null,
   };
   pane.tabIds.push(id);
-  pane.activeTabId = id;
 
-  // Create output element
+  // Create output element (before focusTab so the output div exists)
   const paneEl = document.getElementById('pane-' + paneId);
   const placeholder = paneEl.querySelector('.pane-placeholder');
   if (placeholder) placeholder.remove();
@@ -2803,9 +2802,8 @@ function createTab(session, windowIndex, windowName, targetPaneId) {
     pollInterval: null, ccStatus: null,
   };
   pane.tabIds.push(id);
-  pane.activeTabId = id;
 
-  // Create output element
+  // Create output element (before focusTab so the output div exists)
   const paneEl = document.getElementById('pane-' + paneId);
   const placeholder = paneEl.querySelector('.pane-placeholder');
   if (placeholder) placeholder.remove();
@@ -2851,6 +2849,21 @@ function closeTab(tabId, skipRender) {
   if (pane) {
     if (pane.activeTabId === tabId) {
       pane.activeTabId = pane.tabIds[0] || null;
+      // Restore draft text for newly active tab
+      const pe2 = document.getElementById('pane-' + pane.id);
+      const ta2 = pe2 && pe2.querySelector('.pane-input textarea');
+      if (ta2 && pane.activeTabId && tabStates[pane.activeTabId]) {
+        ta2.value = tabStates[pane.activeTabId].draft || '';
+        ta2.style.height = 'auto'; ta2.dispatchEvent(new Event('input'));
+      } else if (ta2) {
+        ta2.value = ''; ta2.style.height = 'auto'; ta2.dispatchEvent(new Event('input'));
+      }
+      if (M && pane.activeTabId && tabStates[pane.activeTabId]) {
+        M.value = tabStates[pane.activeTabId].globalDraft || '';
+        M.style.height = 'auto'; M.dispatchEvent(new Event('input'));
+      } else if (M) {
+        M.value = ''; M.style.height = 'auto'; M.dispatchEvent(new Event('input'));
+      }
     }
     if (!pane.tabIds.length) {
       // Show placeholder

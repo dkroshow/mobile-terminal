@@ -176,6 +176,9 @@
 ## Recently Completed (cont. 28)
 - **2026-03-02**: Markdown File Browser overlay — "Files" button in topbar opens fullscreen overlay showing session working directories as entry points. Navigate into dirs (shows subdirs + `.md` files only), tap a `.md` file to read with full markdown rendering. Backend: `_get_session_cwds()` (single `tmux list-panes` call, no capture-pane), `_is_path_allowed()` (realpath + prefix check), `GET /api/files` (dir listing), `GET /api/files/read` (file content, 1MB limit). Security: paths restricted to session cwds, hidden files excluded. JS uses event delegation throughout (no inline onclick), navigation history stack with scroll restore, breadcrumbs with `data-fb-action` delegation.
 
+## Recently Completed (cont. 29)
+- **2026-03-02**: Fix per-tab draft text not persisting across tab switches — `createTab` (both terminal and file tab versions) was setting `pane.activeTabId = id` before `focusTab()`, causing `tabChanged = false` and skipping draft save. Removed premature assignment so `focusTab` properly saves old tab's textarea content. Also added draft restoration in `closeTab` when active tab is closed and next tab becomes active.
+
 ## Active Work
 None
 
