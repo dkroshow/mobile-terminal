@@ -939,6 +939,66 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   font-size:13px; font-weight:500; font-family:inherit; cursor:pointer; }
 .wd-btn-dismiss { background:var(--surface); color:var(--text2); }
 
+/* File browser overlay */
+#fb-overlay { display:none; position:fixed; inset:0; z-index:100;
+  background:var(--bg); flex-direction:column; }
+#fb-overlay.open { display:flex; }
+#fb-header { display:flex; align-items:center; gap:8px;
+  padding:calc(var(--safe-top) + 10px) 12px 10px;
+  border-bottom:1px solid var(--border); background:var(--bg2); min-height:44px; }
+#fb-back { background:none; border:none; color:var(--accent); font-size:22px;
+  cursor:pointer; padding:4px 8px; line-height:1; font-family:inherit; }
+#fb-back:disabled { opacity:0.3; }
+#fb-breadcrumbs { flex:1; display:flex; align-items:center; gap:2px;
+  overflow-x:auto; white-space:nowrap; font-size:13px; color:var(--text3);
+  -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+#fb-breadcrumbs::-webkit-scrollbar { display:none; }
+.fb-crumb { background:none; border:none; color:var(--accent); font-size:13px;
+  cursor:pointer; padding:2px 4px; font-family:inherit; white-space:nowrap; }
+.fb-crumb-sep { color:var(--text3); font-size:11px; }
+.fb-crumb-current { color:var(--text); font-weight:600; padding:2px 4px; white-space:nowrap; }
+#fb-close { background:none; border:none; color:var(--text3); font-size:22px;
+  cursor:pointer; padding:4px 8px; line-height:1; }
+#fb-content { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:8px 0; }
+.fb-roots-title { font-size:12px; font-weight:600; color:var(--text3);
+  text-transform:uppercase; letter-spacing:0.5px; padding:12px 16px 8px; }
+.fb-list { list-style:none; margin:0; padding:0; }
+.fb-item { display:flex; align-items:center; gap:10px; padding:11px 16px;
+  border-bottom:1px solid var(--border); cursor:pointer; -webkit-tap-highlight-color:transparent; }
+.fb-item:active { background:var(--surface); }
+.fb-icon { font-size:18px; width:24px; text-align:center; flex-shrink:0; }
+.fb-name { flex:1; font-size:14px; color:var(--text); overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; }
+.fb-meta { font-size:11px; color:var(--text3); white-space:nowrap; }
+.fb-empty { padding:40px 16px; text-align:center; color:var(--text3); font-size:14px; }
+.fb-reader { max-width:700px; margin:0 auto; padding:16px 20px 40px; }
+.fb-reader-title { font-size:15px; font-weight:600; color:var(--text3);
+  margin-bottom:16px; padding-bottom:10px; border-bottom:1px solid var(--border); }
+.fb-reader-body { color:var(--text); font-size:var(--text-size); line-height:1.65; }
+.fb-reader-body h1,.fb-reader-body h2,.fb-reader-body h3,
+.fb-reader-body h4,.fb-reader-body h5,.fb-reader-body h6 {
+  color:var(--text); margin:1.2em 0 0.5em; font-weight:600; }
+.fb-reader-body h1 { font-size:1.5em; } .fb-reader-body h2 { font-size:1.3em; }
+.fb-reader-body h3 { font-size:1.15em; }
+.fb-reader-body p { margin:0.6em 0; }
+.fb-reader-body code { background:var(--surface); padding:2px 5px;
+  border-radius:4px; font-size:0.9em; font-family:'SF Mono',ui-monospace,Menlo,monospace; }
+.fb-reader-body pre { background:var(--surface); padding:12px 14px;
+  border-radius:8px; overflow-x:auto; margin:0.8em 0; }
+.fb-reader-body pre code { background:none; padding:0; font-size:0.85em; }
+.fb-reader-body blockquote { border-left:3px solid var(--accent); margin:0.8em 0;
+  padding:4px 14px; color:var(--text2); }
+.fb-reader-body ul,.fb-reader-body ol { padding-left:1.5em; margin:0.5em 0; }
+.fb-reader-body li { margin:0.3em 0; }
+.fb-reader-body a { color:var(--accent); text-decoration:none; }
+.fb-reader-body a:hover { text-decoration:underline; }
+.fb-reader-body table { border-collapse:collapse; width:100%; margin:0.8em 0; }
+.fb-reader-body th,.fb-reader-body td { border:1px solid var(--border2);
+  padding:6px 10px; font-size:13px; text-align:left; }
+.fb-reader-body th { background:var(--surface); font-weight:600; }
+.fb-reader-body img { max-width:100%; border-radius:8px; }
+.fb-reader-body hr { border:none; border-top:1px solid var(--border); margin:1.5em 0; }
+
 /* Sidebar view tabs (Sessions / Files) */
 #sb-view-tabs { display:flex; gap:0; flex-shrink:0; margin:0 10px 6px; border-radius:8px;
   background:var(--surface); padding:2px; }
@@ -1125,6 +1185,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
       <button id="hamburger" onclick="openMobileSidebar()">&#9776;</button>
       <span style="flex:1"></span>
       <button class="topbar-btn" id="master-notes-btn" onclick="toggleMasterNotes()">Notes</button>
+      <button class="topbar-btn" id="fb-btn" onclick="toggleFileBrowser()">Files</button>
       <button class="topbar-btn" id="add-pane-btn" onclick="addPane()">+ Pane</button>
       <button class="topbar-btn" id="size-btn" onclick="cycleTextSize()">A</button>
       <button class="topbar-btn" id="view-btn" onclick="toggleRaw()">
@@ -1187,6 +1248,15 @@ html, body { height:100%; background:var(--bg); color:var(--text);
       <button class="wd-btn-dismiss" onclick="closeWD()">Close</button>
     </div>
   </div>
+</div>
+
+<div id="fb-overlay">
+  <div id="fb-header">
+    <button id="fb-back" onclick="fbBack()" disabled>&lsaquo;</button>
+    <div id="fb-breadcrumbs"><span class="fb-crumb-current">Working Directories</span></div>
+    <button id="fb-close" onclick="closeFileBrowser()">&times;</button>
+  </div>
+  <div id="fb-content"></div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/marked/lib/marked.umd.min.js"></script>
@@ -1332,6 +1402,199 @@ function abbreviateCwd(cwd) {
   if (parts.length <= 2) return p;
   return parts.slice(-2).join('/');
 }
+
+// === File Browser (overlay) ===
+let _fbHistory = []; // [{mode, path, scrollTop}]
+let _fbCurrentPath = null;
+let _fbMode = 'roots'; // 'roots' | 'list' | 'read'
+
+function toggleFileBrowser() {
+  const ov = document.getElementById('fb-overlay');
+  if (ov.classList.contains('open')) closeFileBrowser();
+  else openFileBrowser();
+}
+function openFileBrowser() {
+  _fbHistory = [];
+  _fbMode = 'roots';
+  _fbCurrentPath = null;
+  document.getElementById('fb-overlay').classList.add('open');
+  fbShowRoots();
+  fbUpdateBreadcrumbs();
+}
+function closeFileBrowser() {
+  document.getElementById('fb-overlay').classList.remove('open');
+}
+
+function fbShowRoots() {
+  _fbMode = 'roots';
+  _fbCurrentPath = null;
+  const content = document.getElementById('fb-content');
+  document.getElementById('fb-back').disabled = true;
+  const cwds = new Set();
+  if (_dashboardData) {
+    for (const s of _dashboardData.sessions) {
+      for (const w of s.windows) {
+        if (w.cwd) cwds.add(w.cwd);
+      }
+    }
+  }
+  if (cwds.size === 0) {
+    content.innerHTML = '<div class="fb-empty">No active sessions found</div>';
+    fbUpdateBreadcrumbs();
+    return;
+  }
+  const sorted = [...cwds].sort();
+  let html = '<div class="fb-roots-title">Working Directories</div><ul class="fb-list">';
+  for (const cwd of sorted) {
+    html += '<li class="fb-item" data-path="' + esc(cwd) + '" data-type="dir">'
+      + '<span class="fb-icon">\\ud83d\\udcc2</span>'
+      + '<span class="fb-name">' + esc(abbreviateCwd(cwd)) + '</span>'
+      + '<span class="fb-meta" style="font-family:\\'SF Mono\\',monospace;font-size:10px;color:var(--text3)">' + esc(cwd) + '</span>'
+      + '</li>';
+  }
+  html += '</ul>';
+  content.innerHTML = html;
+  content.querySelector('.fb-list').addEventListener('click', function(e) {
+    const item = e.target.closest('.fb-item');
+    if (!item) return;
+    fbNavigate(item.dataset.path);
+  });
+  fbUpdateBreadcrumbs();
+}
+
+function fbNavigate(dirPath) {
+  const scrollTop = document.getElementById('fb-content').scrollTop;
+  _fbHistory.push({ mode: _fbMode, path: _fbCurrentPath, scrollTop });
+  fbLoadDir(dirPath);
+}
+
+async function fbLoadDir(dirPath) {
+  _fbMode = 'list';
+  _fbCurrentPath = dirPath;
+  const content = document.getElementById('fb-content');
+  document.getElementById('fb-back').disabled = false;
+  content.innerHTML = '<div class="fb-empty">Loading...</div>';
+  fbUpdateBreadcrumbs();
+  try {
+    const r = await fetch('/api/files?path=' + encodeURIComponent(dirPath));
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      content.innerHTML = '<div class="fb-empty">' + esc(err.detail || 'Access denied') + '</div>';
+      return;
+    }
+    const data = await r.json();
+    const filtered = data.items.filter(i => i.type === 'dir' || i.name.toLowerCase().endsWith('.md'));
+    if (filtered.length === 0) {
+      content.innerHTML = '<div class="fb-empty">No directories or markdown files here</div>';
+      return;
+    }
+    let html = '<ul class="fb-list">';
+    for (const item of filtered) {
+      const icon = item.type === 'dir' ? '\\ud83d\\udcc1' : '\\ud83d\\udcc4';
+      let meta = '';
+      if (item.type === 'file') {
+        const kb = item.size < 1024 ? item.size + ' B' : (item.size / 1024).toFixed(1) + ' KB';
+        meta = kb;
+      }
+      html += '<li class="fb-item" data-path="' + esc(item.path) + '" data-type="' + item.type + '">'
+        + '<span class="fb-icon">' + icon + '</span>'
+        + '<span class="fb-name">' + esc(item.name) + '</span>'
+        + (meta ? '<span class="fb-meta">' + meta + '</span>' : '')
+        + '</li>';
+    }
+    html += '</ul>';
+    content.innerHTML = html;
+    content.querySelector('.fb-list').addEventListener('click', function(e) {
+      const item = e.target.closest('.fb-item');
+      if (!item) return;
+      if (item.dataset.type === 'dir') fbNavigate(item.dataset.path);
+      else fbOpenFile(item.dataset.path);
+    });
+  } catch(e) {
+    content.innerHTML = '<div class="fb-empty">Error loading directory</div>';
+  }
+}
+
+async function fbOpenFile(filePath) {
+  const scrollTop = document.getElementById('fb-content').scrollTop;
+  _fbHistory.push({ mode: _fbMode, path: _fbCurrentPath, scrollTop });
+  _fbMode = 'read';
+  _fbCurrentPath = filePath;
+  const content = document.getElementById('fb-content');
+  document.getElementById('fb-back').disabled = false;
+  content.innerHTML = '<div class="fb-empty">Loading...</div>';
+  fbUpdateBreadcrumbs();
+  try {
+    const r = await fetch('/api/files/read?path=' + encodeURIComponent(filePath));
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      content.innerHTML = '<div class="fb-empty">' + esc(err.detail || 'Cannot read file') + '</div>';
+      return;
+    }
+    const data = await r.json();
+    content.innerHTML = '<div class="fb-reader">'
+      + '<div class="fb-reader-title">' + esc(data.name) + '</div>'
+      + '<div class="fb-reader-body">' + mdFile(data.content) + '</div>'
+      + '</div>';
+    content.scrollTop = 0;
+  } catch(e) {
+    content.innerHTML = '<div class="fb-empty">Error reading file</div>';
+  }
+}
+
+function fbBack() {
+  if (_fbHistory.length === 0) return;
+  const prev = _fbHistory.pop();
+  if (prev.mode === 'roots') {
+    fbShowRoots();
+  } else if (prev.mode === 'list') {
+    fbLoadDir(prev.path).then(() => {
+      document.getElementById('fb-content').scrollTop = prev.scrollTop || 0;
+    });
+  }
+  document.getElementById('fb-back').disabled = _fbHistory.length === 0 && prev.mode === 'roots';
+  fbUpdateBreadcrumbs();
+}
+
+function fbUpdateBreadcrumbs() {
+  const bc = document.getElementById('fb-breadcrumbs');
+  if (_fbMode === 'roots') {
+    bc.innerHTML = '<span class="fb-crumb-current">Working Directories</span>';
+    return;
+  }
+  let html = '<button class="fb-crumb" data-fb-action="roots">Roots</button>';
+  if (_fbCurrentPath) {
+    const parts = _fbCurrentPath.split('/').filter(Boolean);
+    const display = abbreviateCwd(_fbCurrentPath);
+    if (_fbMode === 'read') {
+      const dirPath = _fbCurrentPath.substring(0, _fbCurrentPath.lastIndexOf('/'));
+      const fileName = parts[parts.length - 1];
+      const dirDisplay = abbreviateCwd(dirPath);
+      html += '<span class="fb-crumb-sep">/</span>';
+      html += '<button class="fb-crumb" data-fb-action="dir" data-fb-path="' + esc(dirPath) + '">' + esc(dirDisplay) + '</button>';
+      html += '<span class="fb-crumb-sep">/</span>';
+      html += '<span class="fb-crumb-current">' + esc(fileName) + '</span>';
+    } else {
+      html += '<span class="fb-crumb-sep">/</span>';
+      html += '<span class="fb-crumb-current">' + esc(display) + '</span>';
+    }
+  }
+  bc.innerHTML = html;
+  bc.scrollLeft = bc.scrollWidth;
+}
+document.getElementById('fb-breadcrumbs').addEventListener('click', function(e) {
+  const btn = e.target.closest('[data-fb-action]');
+  if (!btn) return;
+  if (btn.dataset.fbAction === 'roots') {
+    _fbHistory = [];
+    fbShowRoots();
+    fbUpdateBreadcrumbs();
+  } else if (btn.dataset.fbAction === 'dir') {
+    _fbHistory = [{ mode: 'roots', path: null, scrollTop: 0 }];
+    fbLoadDir(btn.dataset.fbPath);
+    fbUpdateBreadcrumbs();
+  }
+});
 
 // === File Browser (sidebar-integrated) ===
 function mdFile(s) {

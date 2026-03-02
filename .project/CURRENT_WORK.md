@@ -173,6 +173,9 @@
 ## Recently Completed (cont. 27)
 - **2026-02-27**: Fix text selection jumping in Raw/Clean view — 1s poll was replacing DOM content while user was selecting text. Added `window.getSelection()` guard in `pollTab()` to skip `renderOutput()` when an active Range selection exists inside the output element. State still updates in background; next poll after selection release renders latest content.
 
+## Recently Completed (cont. 28)
+- **2026-03-02**: Markdown File Browser overlay — "Files" button in topbar opens fullscreen overlay showing session working directories as entry points. Navigate into dirs (shows subdirs + `.md` files only), tap a `.md` file to read with full markdown rendering. Backend: `_get_session_cwds()` (single `tmux list-panes` call, no capture-pane), `_is_path_allowed()` (realpath + prefix check), `GET /api/files` (dir listing), `GET /api/files/read` (file content, 1MB limit). Security: paths restricted to session cwds, hidden files excluded. JS uses event delegation throughout (no inline onclick), navigation history stack with scroll restore, breadcrumbs with `data-fb-action` delegation.
+
 ## Active Work
 None
 
