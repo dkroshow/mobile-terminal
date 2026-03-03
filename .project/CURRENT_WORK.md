@@ -179,6 +179,9 @@
 ## Recently Completed (cont. 29)
 - **2026-03-02**: Fix per-tab draft text not persisting across tab switches — `createTab` (both terminal and file tab versions) was setting `pane.activeTabId = id` before `focusTab()`, causing `tabChanged = false` and skipping draft save. Removed premature assignment so `focusTab` properly saves old tab's textarea content. Also added draft restoration in `closeTab` when active tab is closed and next tab becomes active.
 
+## Recently Completed (cont. 30)
+- **2026-03-02**: Box-drawing table rendering — CC renders markdown tables as ASCII box art (┌─┬─┐ / │ / └─┴─┘) that's 270+ chars wide, unreadable on mobile. Now detected and converted to responsive HTML `<table>` in both views. Six changes: (1) `.box-table` CSS with word-break/vertical-align, (2) `boxTableToHtml()` parses separator/content sections, handles multi-line cells, (3) `renderRawWithTables()` for raw view (falls back to textContent when no tables), (4) `cleanTerminal()` pre-marks table blocks so rules 2/3 skip them, (5) `parseCCTurns()` box-drawing line filter exempts lines with table corner/intersection chars (┌┐└┘┬┼┴), (6) `md()` extracts table blocks before code-block wrapping.
+
 ## Active Work
 None
 

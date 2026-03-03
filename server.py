@@ -861,6 +861,12 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .turn-body th, .turn-body td { padding:5px 8px; text-align:left;
   border-bottom:1px solid var(--border); }
 .turn-body th { color:var(--text2); font-weight:600; }
+.box-table-wrap { overflow-x:auto; margin:0.5em 0; }
+.box-table { border-collapse:collapse; width:100%; white-space:normal; }
+.box-table th, .box-table td { padding:6px 10px; text-align:left; vertical-align:top;
+  border:1px solid var(--border); font-size:var(--mono-size); line-height:1.4; word-break:break-word; }
+.box-table th { color:var(--text2); font-weight:600; background:rgba(255,255,255,0.03); }
+.box-table td { color:var(--text); }
 .turn-body details { background:var(--bg); border:1px solid var(--border);
   border-radius:10px; margin:8px 0; padding:0; overflow:hidden; }
 .turn-body details summary { padding:10px 14px; cursor:pointer;
@@ -1357,6 +1363,55 @@ const SEND_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 
 // === Utility ===
 function esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+const _tblStartRe = /^\s*\u250c[\u2500\u252c]+\u2510/;
+const _tblEndRe = /^\s*\u2514[\u2500\u2534]+\u2518/;
+const _tblSepRe = /^[\u250c\u251c\u2514][\u2500\u252c\u253c\u2534\u2510\u2524\u2518]+$/;
+function boxTableToHtml(tableLines) {
+  const sections = []; let cur = [];
+  for (const line of tableLines) {
+    if (_tblSepRe.test(line.trim())) {
+      if (cur.length) { sections.push(cur); cur = []; }
+    } else { cur.push(line); }
+  }
+  if (cur.length) sections.push(cur);
+  if (!sections.length) return esc(tableLines.join('\\n'));
+  let html = '<div class="box-table-wrap"><table class="box-table">';
+  sections.forEach((rows, sIdx) => {
+    const isHdr = sIdx === 0, tag = isHdr ? 'th' : 'td';
+    const cells = [];
+    for (const line of rows) {
+      const parts = line.split('\\u2502');
+      if (parts.length < 3) continue;
+      const ct = parts.slice(1, -1).map(p => p.trim());
+      if (!cells.length) ct.forEach(t => cells.push([t]));
+      else ct.forEach((t, i) => { if (i < cells.length) cells[i].push(t); else cells.push([t]); });
+    }
+    if (isHdr) html += '<thead>';
+    html += '<tr>';
+    for (const cell of cells) {
+      html += '<' + tag + '>' + cell.filter(Boolean).map(t => esc(t)).join('<br>') + '</' + tag + '>';
+    }
+    html += '</tr>';
+    if (isHdr) html += '</thead>';
+  });
+  html += '</table></div>';
+  return html;
+}
+function renderRawWithTables(raw) {
+  const lines = raw.split('\\n');
+  const parts = []; let buf = []; let i = 0;
+  while (i < lines.length) {
+    if (_tblStartRe.test(lines[i])) {
+      if (buf.length) { parts.push(esc(buf.join('\\n'))); buf = []; }
+      const tl = []; let j = i, found = false;
+      while (j < lines.length) { tl.push(lines[j]); if (_tblEndRe.test(lines[j]) && j > i) { found = true; j++; break; } j++; }
+      if (found) parts.push(boxTableToHtml(tl)); else buf.push(...tl);
+      i = j;
+    } else { buf.push(lines[i]); i++; }
+  }
+  if (buf.length) parts.push(esc(buf.join('\\n')));
+  return parts.join('');
+}
 function md(s) {
   if (typeof marked !== 'undefined') {
     try {
@@ -1368,23 +1423,34 @@ function md(s) {
         return '<a href="' + h + '" target="_blank" rel="noopener noreferrer"' + (t ? ' title="' + t + '"' : '') + '>' + tx + '</a>';
       };
       marked.setOptions({ breaks: false, renderer: renderer });
-      // Wrap lines with box-drawing chars in fenced code blocks
-      const boxRe = /[\u2500-\u257f\u2580-\u259f]/;
-      const lines = s.split('\\n');
-      const out = []; let inBox = false;
-      for (const line of lines) {
-        if (boxRe.test(line)) {
-          if (!inBox) { out.push('```'); inBox = true; }
-          out.push(line);
-        } else {
-          if (inBox) { out.push('```'); inBox = false; }
-          out.push(line);
-        }
+      // Split into table blocks and text blocks
+      const allLines = s.split('\\n');
+      const segments = []; let textBuf = []; let li = 0;
+      while (li < allLines.length) {
+        if (_tblStartRe.test(allLines[li])) {
+          if (textBuf.length) { segments.push({t:'text', l:textBuf}); textBuf = []; }
+          const tl = []; let j = li, found = false;
+          while (j < allLines.length) { tl.push(allLines[j]); if (_tblEndRe.test(allLines[j]) && j > li) { found = true; j++; break; } j++; }
+          if (found) segments.push({t:'table', l:tl}); else textBuf.push(...tl);
+          li = j;
+        } else { textBuf.push(allLines[li]); li++; }
       }
-      if (inBox) out.push('```');
-      // Escape HTML tags in terminal output so they render as text, not DOM elements
-      const escaped = out.join('\\n').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      return marked.parse(escaped);
+      if (textBuf.length) segments.push({t:'text', l:textBuf});
+      // Render each segment
+      const boxRe = /[\u2500-\u257f\u2580-\u259f]/;
+      let html = '';
+      for (const seg of segments) {
+        if (seg.t === 'table') { html += boxTableToHtml(seg.l); continue; }
+        const out = []; let inBox = false;
+        for (const line of seg.l) {
+          if (boxRe.test(line)) { if (!inBox) { out.push('```'); inBox = true; } out.push(line); }
+          else { if (inBox) { out.push('```'); inBox = false; } out.push(line); }
+        }
+        if (inBox) out.push('```');
+        const escaped = out.join('\\n').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        html += marked.parse(escaped);
+      }
+      return html;
     } catch(e) { /* fall through to plain text */ }
   }
   return '<p>' + esc(s) + '</p>';
@@ -2419,17 +2485,28 @@ function updateSidebarStatus(session, windowIndex, ccStatus, contextPct, permMod
 // === Clean/parse (unchanged core logic) ===
 function cleanTerminal(raw) {
   let lines = raw.split('\\n');
-  // Remove box-drawing border lines: ╭───╮, ╰───╯, ├───┤
-  lines = lines.filter(l => !/^\\s*[\\u256d\\u2570\\u251c][\\u2500\\u2504\\u2501]+[\\u256e\\u256f\\u2524]\\s*$/.test(l));
-  // Strip │ borders from line start/end
-  lines = lines.map(l => l.replace(/^\\s*\\u2502\\s?/, '').replace(/\\s?\\u2502\\s*$/, ''));
-  // Remove TUI divider lines: pure box-drawing or labeled dividers (── label ──)
-  lines = lines.filter(l => {
-    const t = l.trim(); if (!t) return true;
-    const bc = (t.match(/[\\u2500-\\u257f]/g) || []).length;
-    return !(bc > 20 && bc > t.length * 0.6);
-  });
-  let text = lines.join('\\n');
+  // Mark lines inside box-drawing tables (┌...┘) — protect from TUI chrome stripping
+  const inTbl = new Array(lines.length).fill(false);
+  for (let i = 0; i < lines.length; i++) {
+    if (_tblStartRe.test(lines[i])) {
+      inTbl[i] = true;
+      for (let j = i + 1; j < lines.length; j++) { inTbl[j] = true; if (_tblEndRe.test(lines[j])) break; }
+    }
+  }
+  const result = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (inTbl[i]) { result.push(lines[i]); continue; }
+    const l = lines[i];
+    // Remove rounded border lines: ╭───╮, ╰───╯, ├───┤
+    if (/^\\s*[\\u256d\\u2570\\u251c][\\u2500\\u2504\\u2501]+[\\u256e\\u256f\\u2524]\\s*$/.test(l)) continue;
+    // Strip │ borders from line start/end
+    let cleaned = l.replace(/^\\s*\\u2502\\s?/, '').replace(/\\s?\\u2502\\s*$/, '');
+    // Remove TUI divider lines: pure box-drawing or labeled dividers
+    const t = cleaned.trim();
+    if (t) { const bc = (t.match(/[\\u2500-\\u257f]/g) || []).length; if (bc > 20 && bc > t.length * 0.6) continue; }
+    result.push(cleaned);
+  }
+  let text = result.join('\\n');
   text = text.replace(/[\\u280b\\u2819\\u2839\\u2838\\u283c\\u2834\\u2826\\u2827\\u2807\\u280f]/g, '');
   text = text.replace(/\\n{3,}/g, '\\n\\n');
   return text.trim();
@@ -2494,7 +2571,7 @@ function parseCCTurns(text) {
     const line = lines[li];
     const raw = line.replace(/\\u00a0/g, ' ');
     const t = raw.trim();
-    if (/^[\\u2500-\\u257f]{3,}$/.test(t) && t.length > 20) continue;
+    if (/^[\\u2500-\\u257f]{3,}$/.test(t) && t.length > 20 && !/[\\u250c\\u2510\\u2514\\u2518\\u252c\\u253c\\u2534]/.test(t)) continue;
     if (/^[\\u23f5]/.test(t)) continue;
     if (/^\\u2026/.test(t)) continue;
     if (!t) { if (cur && cur.role === 'assistant' && !inTool) cur.lines.push(''); continue; }
@@ -2563,7 +2640,8 @@ function renderOutput(raw, targetEl, state, tabId) {
   }
   if (state.rawMode) {
     targetEl.className = 'pane-output raw';
-    targetEl.textContent = raw;
+    if (_tblStartRe.test(raw)) { targetEl.innerHTML = renderRawWithTables(raw); }
+    else { targetEl.textContent = raw; }
     return;
   }
   targetEl.className = 'pane-output chat';
