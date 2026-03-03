@@ -851,6 +851,9 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .turn-body blockquote { border-left:3px solid var(--border2); margin:0.5em 0;
   padding:4px 14px; color:var(--text2); }
 .turn-body a { color:var(--accent); text-decoration:none; }
+a.file-link { color:var(--accent); text-decoration:underline; text-decoration-style:dotted;
+  text-underline-offset:2px; cursor:pointer; }
+a.file-link:active { opacity:0.6; }
 .turn-body.mono { font-family:'SF Mono',ui-monospace,Menlo,monospace;
   font-size:var(--mono-size); line-height:1.6; white-space:pre-wrap; word-break:break-word;
   color:#999; }
@@ -1454,6 +1457,58 @@ function md(s) {
     } catch(e) { /* fall through to plain text */ }
   }
   return '<p>' + esc(s) + '</p>';
+}
+function getTabCwd(tabId) {
+  if (!_dashboardData) return null;
+  const tab = allTabs[tabId];
+  if (!tab || tab.type === 'file') return null;
+  const sess = _dashboardData.sessions.find(s => s.name === tab.session);
+  if (!sess) return null;
+  const win = sess.windows.find(w => w.index === tab.windowIndex);
+  return win ? win.cwd : null;
+}
+const _fileExtPat = '(?:py|js|ts|tsx|jsx|mjs|cjs|md|json|ya?ml|toml|css|scss|html|sh|rb|go|rs|c|h|cpp|hpp|java|kt|swift|vue|svelte|sql|xml|conf|cfg|ini|txt|env|lock|plist|log|csv)';
+const _filePathRe = new RegExp('((?:\\\\.{0,2}\\\\/)?(?:[\\\\w@.+-]+\\\\/)*[\\\\w@.+-]+\\\\.(?:' + _fileExtPat + ')(?![\\\\w]))(?::(\\\\d+))?', 'g');
+function linkifyFilePaths(el, cwd) {
+  if (!el || !cwd) return;
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+  const nodes = [];
+  let n;
+  while (n = walker.nextNode()) {
+    // Skip text inside <a>, <pre>, <textarea>, <input>
+    if (n.parentElement.closest('a,pre,textarea,input')) continue;
+    nodes.push(n);
+  }
+  for (const textNode of nodes) {
+    const text = textNode.textContent;
+    _filePathRe.lastIndex = 0;
+    if (!_filePathRe.test(text)) continue;
+    _filePathRe.lastIndex = 0;
+    const frag = document.createDocumentFragment();
+    let lastIdx = 0, match;
+    while ((match = _filePathRe.exec(text)) !== null) {
+      const filePath = match[1], lineNum = match[2], full = match[0];
+      // Only link if path has a directory separator OR has a :line suffix
+      if (!filePath.includes('/') && !lineNum) continue;
+      if (match.index > lastIdx)
+        frag.appendChild(document.createTextNode(text.substring(lastIdx, match.index)));
+      const absPath = filePath.startsWith('/') ? filePath : cwd + '/' + filePath;
+      const a = document.createElement('a');
+      a.className = 'file-link';
+      a.textContent = full;
+      a.dataset.path = absPath;
+      if (lineNum) a.dataset.line = lineNum;
+      a.href = 'javascript:void(0)';
+      a.onclick = function(e) { e.preventDefault(); e.stopPropagation(); ftOpenFile(this.dataset.path); };
+      frag.appendChild(a);
+      lastIdx = match.index + full.length;
+    }
+    if (lastIdx > 0) {
+      if (lastIdx < text.length)
+        frag.appendChild(document.createTextNode(text.substring(lastIdx)));
+      textNode.parentNode.replaceChild(frag, textNode);
+    }
+  }
 }
 function abbreviateCwd(cwd) {
   if (!cwd) return '';
@@ -2642,6 +2697,7 @@ function renderOutput(raw, targetEl, state, tabId) {
     targetEl.className = 'pane-output raw';
     if (_tblStartRe.test(raw)) { targetEl.innerHTML = renderRawWithTables(raw); }
     else { targetEl.textContent = raw; }
+    linkifyFilePaths(targetEl, getTabCwd(tabId));
     return;
   }
   targetEl.className = 'pane-output chat';
@@ -2692,6 +2748,7 @@ function renderOutput(raw, targetEl, state, tabId) {
   if (!html)
     html = '<div class="turn assistant"><div class="turn-label">Terminal</div><div class="turn-body"><p style="color:var(--text3)">Waiting for output...</p></div></div>';
   targetEl.innerHTML = html;
+  linkifyFilePaths(targetEl, getTabCwd(tabId));
 }
 
 // === Pane management ===
