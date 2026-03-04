@@ -1535,7 +1535,12 @@ function linkifyFilePaths(el, cwd) {
       a.dataset.path = absPath;
       if (lineNum) a.dataset.line = lineNum;
       a.href = 'javascript:void(0)';
-      a.onclick = function(e) { e.preventDefault(); e.stopPropagation(); ftOpenFile(this.dataset.path); };
+      a.onclick = function(e) { e.preventDefault(); e.stopPropagation();
+        // Open in another pane if multiple panes exist, so user sees both output and file
+        let tgt = null;
+        if (panes.length >= 2) { const o = panes.find(p => p.id !== activePaneId); if (o) tgt = o.id; }
+        ftOpenFile(this.dataset.path, tgt);
+      };
       frag.appendChild(a);
       lastIdx = match.index + full.length;
     }
@@ -2732,13 +2737,26 @@ function renderOutput(raw, targetEl, state, tabId) {
   if (state.rawMode) {
     targetEl.className = 'pane-output raw';
     // Clean up for mobile readability: trim trailing whitespace per line,
-    // collapse excessive blank lines, truncate long horizontal dividers
-    let display = raw.split('\\n').map(l => {
+    // collapse excessive blank lines, truncate long horizontal dividers,
+    // rejoin CC TUI word-wrapped prose lines
+    let dLines = raw.split('\\n').map(l => {
       l = l.trimEnd();
-      // Truncate CC TUI horizontal dividers (─ U+2500) that span full terminal width
       if (l.length > 40 && /^\\u2500+$/.test(l)) l = '\\u2500'.repeat(40);
       return l;
-    }).join('\\n').replace(/\\n{4,}/g, '\\n\\n\\n');
+    });
+    // Join CC TUI word-wrap continuations: lines that hit the terminal wrap width
+    // followed by indented lowercase continuation = same sentence split at wrap point.
+    // Detect wrap width dynamically (max line length = terminal content width).
+    const wrapW = Math.max(...dLines.map(l => l.length)) - 4;
+    let jLines = [dLines[0]];
+    for (let k = 1; k < dLines.length; k++) {
+      const prev = jLines[jLines.length - 1];
+      const cur = dLines[k];
+      if (prev.length >= wrapW && /^  \\S/.test(prev) && /^  [a-z]/.test(cur)) {
+        jLines[jLines.length - 1] = prev + ' ' + cur.trimStart();
+      } else { jLines.push(cur); }
+    }
+    let display = jLines.join('\\n').replace(/\\n{4,}/g, '\\n\\n\\n');
     if (_tblStartRe.test(display)) { targetEl.innerHTML = renderRawWithTables(display); }
     else { targetEl.textContent = display; }
     if (_fileLinksEnabled) linkifyFilePaths(targetEl, getTabCwd(tabId));

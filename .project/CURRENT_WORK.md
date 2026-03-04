@@ -192,6 +192,10 @@
 ## Recently Completed (cont. 33)
 - **2026-03-03**: Raw view mobile formatting — three fixes: (1) trim trailing whitespace per line (removes tmux padding), (2) collapse 4+ consecutive blank lines to 3 (CC TUI fills content-to-status-bar gap with empty lines), (3) truncate `─` (U+2500) horizontal dividers >40 chars to 40 (273-char dividers wrapped into multiple rows on mobile). Also fixed box-drawing table detection in Raw view — `_tblStartRe`/`_tblEndRe` were missing the `m` (multiline) flag, so `.test(display)` only checked the first line and missed tables in the middle of output.
 
+## Recently Completed (cont. 34)
+- **2026-03-03**: CC TUI word-wrap rejoining in Raw view — CC's TUI wraps prose at the terminal width, creating hard line breaks mid-sentence that double-wrap on mobile. Raw view now dynamically detects the wrap width (`max(line lengths) - 4`) and joins continuation lines (2-space indent + lowercase start) that hit the boundary. Only lines at the actual wrap width are joined — shorter lines (commands, bullet points) stay separate.
+- **2026-03-03**: File hyperlinks open in other pane — clicking a file path hyperlink in Claude output now opens the file tab in a different pane when 2+ panes exist, enabling side-by-side viewing. Single-pane layout still opens in the same pane.
+
 ## Active Work
 None
 
