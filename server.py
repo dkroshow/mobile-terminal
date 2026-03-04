@@ -536,6 +536,8 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .sb-snippet { font-size:var(--sb-detail); color:var(--text3);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   max-width:100%; font-style:italic; }
+.sb-standby { font-size:var(--sb-tiny); color:var(--blue, #5b9bd5); font-weight:600;
+  text-transform:uppercase; letter-spacing:0.5px; }
 .sb-win-detail-btn { background:none; border:none; color:var(--text3);
   font-size:16px; cursor:pointer; padding:2px 4px; border-radius:4px;
   flex-shrink:0; opacity:0; transition:opacity .15s; line-height:1; }
@@ -945,9 +947,9 @@ a.file-link:active { opacity:0.6; }
   border-radius:16px; padding:20px; width:min(340px, 85vw); position:relative; }
 #wd-modal h3 { font-size:14px; font-weight:600; color:var(--text); margin-bottom:14px; }
 .wd-close-x { position:absolute; top:12px; right:12px; width:28px; height:28px;
-  border:none; border-radius:50%; background:rgba(229,83,75,0.15); color:var(--red);
+  border:none; border-radius:50%; background:var(--surface); color:var(--text2);
   font-size:16px; line-height:28px; text-align:center; cursor:pointer; padding:0; }
-.wd-close-x:active { background:rgba(229,83,75,0.3); }
+.wd-close-x:active { background:var(--border); }
 .wd-row { display:flex; gap:10px; padding:8px 0; border-bottom:1px solid var(--border); }
 .wd-row:last-child { border-bottom:none; }
 .wd-label { color:var(--text3); font-size:11px; font-weight:600;
@@ -966,6 +968,7 @@ a.file-link:active { opacity:0.6; }
 .wd-btns button { flex:1; padding:9px; border:none; border-radius:8px;
   font-size:13px; font-weight:500; font-family:inherit; cursor:pointer; }
 .wd-btn-dismiss { background:var(--surface); color:var(--text2); }
+.wd-btn-dismiss.active { background:rgba(91,155,213,0.15); color:#5b9bd5; }
 
 /* File browser overlay */
 #fb-overlay { display:none; position:fixed; inset:0; z-index:100;
@@ -1245,8 +1248,7 @@ a.file-link:active { opacity:0.6; }
   <div id="bar">
     <div id="input-row">
       <textarea id="msg" rows="1" placeholder="Enter command..."
-        autocorrect="off" autocapitalize="none" autocomplete="off"
-        spellcheck="false" enterkeyhint="send"></textarea>
+        autocomplete="off" enterkeyhint="send"></textarea>
       <button id="send-btn" onclick="sendGlobal()" aria-label="Send">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
           stroke-linecap="round" stroke-linejoin="round">
@@ -1281,7 +1283,7 @@ a.file-link:active { opacity:0.6; }
 
 <div id="wd-overlay" onclick="if(event.target===this)closeWD()">
   <div id="wd-modal">
-    <button class="wd-close-x" onclick="closeWDWindow()" title="Close window">&times;</button>
+    <button class="wd-close-x" onclick="closeWD()" title="Close">&times;</button>
     <h3 id="wd-title">Window Details</h3>
     <div id="wd-content"></div>
     <div id="wd-rename-row">
@@ -1290,7 +1292,8 @@ a.file-link:active { opacity:0.6; }
       <button class="wd-save-btn" onclick="saveWDRename()">Save</button>
     </div>
     <div class="wd-btns">
-      <button class="wd-btn-dismiss" onclick="closeWD()">Close</button>
+      <button id="wd-standby-btn" class="wd-btn-dismiss" onclick="toggleWDStandby()">Set Standby</button>
+      <button class="wd-btn-dismiss" onclick="closeWDWindow()" style="color:var(--red)">Close Window</button>
     </div>
   </div>
 </div>
@@ -1524,8 +1527,6 @@ function linkifyFilePaths(el, cwd) {
     let lastIdx = 0, match;
     while ((match = _filePathRe.exec(text)) !== null) {
       const filePath = match[1], lineNum = match[2], full = match[0];
-      // Only link if path has a directory separator OR has a :line suffix
-      if (!filePath.includes('/') && !lineNum) continue;
       if (match.index > lastIdx)
         frag.appendChild(document.createTextNode(text.substring(lastIdx, match.index)));
       const absPath = filePath.startsWith('/') ? filePath : cwd + '/' + filePath;
@@ -2825,8 +2826,7 @@ function createPane(parentEl) {
     + '<div class="pane-placeholder">Open a window from the sidebar</div>'
     + '<div class="pane-input">'
     + '<div class="pane-input-row"><textarea rows="1" placeholder="Enter command..."'
-    + ' autocorrect="off" autocapitalize="none" autocomplete="off"'
-    + ' spellcheck="false" enterkeyhint="send"></textarea>'
+    + ' autocomplete="off" enterkeyhint="send"></textarea>'
     + '<button class="pane-send" aria-label="Send">' + SEND_SVG + '</button></div>'
     + '<div class="pane-toolbar">'
     + '<button class="pill" onclick="togglePaneTray(this,\\'keys\\')">Keys</button>'
@@ -4453,6 +4453,7 @@ function renderSidebarSession(s, activeTab, isHidden) {
       + '<div class="sb-win-dot ' + dotClass + '" data-wid="' + wid + '"></div>'
       + '<div class="sb-win-info">'
       + '<div class="sb-win-name">' + esc(w.name) + '</div>'
+      + (getStandby(s.name, w.index) ? '<div class="sb-standby">Standby</div>' : '')
       + (snippet ? '<div class="sb-snippet" title="' + esc(snippet) + '">' + esc(snippet) + '</div>' : '')
       + (_sidebarExpanded ? '<div class="sb-win-cwd">' + esc(abbreviateCwd(w.cwd)) + '</div>' : '')
       + (_sidebarExpanded && w.is_cc ? '<div class="sb-perm' + (w.cc_perm_mode && /dangerously|skip|bypass/i.test(w.cc_perm_mode) ? ' danger' : '') + '" data-wid="' + wid + '">' + (w.cc_perm_mode ? esc(w.cc_perm_mode) : '') + '</div>' : '')
@@ -4596,6 +4597,23 @@ function saveSidebarOrder() {
   try { prefs.setItem('sidebar:order', JSON.stringify(_sidebarOrder)); } catch(e) {}
 }
 
+// === Standby ===
+function getStandby(session, windowIndex) {
+  return prefs.getItem('standby:' + session + ':' + windowIndex) === '1';
+}
+function setStandby(session, windowIndex, on) {
+  if (on) prefs.setItem('standby:' + session + ':' + windowIndex, '1');
+  else prefs.removeItem('standby:' + session + ':' + windowIndex);
+}
+function toggleWDStandby() {
+  if (!_wdSession || _wdWindow === null) return;
+  const on = !getStandby(_wdSession, _wdWindow);
+  setStandby(_wdSession, _wdWindow, on);
+  const btn = document.getElementById('wd-standby-btn');
+  if (btn) { btn.textContent = on ? 'Remove Standby' : 'Set Standby'; btn.className = 'wd-btn-dismiss' + (on ? ' active' : ''); }
+  loadDashboard();
+}
+
 // === Window details modal ===
 function openWD(session, windowIndex) {
   closeMobileSidebar();
@@ -4633,6 +4651,10 @@ function openWD(session, windowIndex) {
       + '</span></span></div>';
   }
   document.getElementById('wd-content').innerHTML = html;
+  const isStandby = getStandby(session, windowIndex);
+  const sbBtn = document.getElementById('wd-standby-btn');
+  sbBtn.textContent = isStandby ? 'Remove Standby' : 'Set Standby';
+  if (isStandby) sbBtn.classList.add('active'); else sbBtn.classList.remove('active');
   document.getElementById('wd-rename-input').value = win.name;
   setTimeout(() => document.getElementById('wd-rename-input').focus(), 100);
 }
@@ -4893,7 +4915,7 @@ function cleanupStaleStorage() {
   for (const s of _dashboardData.sessions) {
     for (const w of s.windows) validKeys.add(s.name + ':' + w.index);
   }
-  const prefixes = ['notepad:', 'queue:'];
+  const prefixes = ['notepad:', 'queue:', 'standby:'];
   try {
     for (const key of prefs.keys()) {
       for (const pfx of prefixes) {

@@ -196,6 +196,10 @@
 - **2026-03-03**: CC TUI word-wrap rejoining in Raw view — CC's TUI wraps prose at the terminal width, creating hard line breaks mid-sentence that double-wrap on mobile. Raw view now dynamically detects the wrap width (`max(line lengths) - 4`) and joins continuation lines (2-space indent + lowercase start) that hit the boundary. Only lines at the actual wrap width are joined — shorter lines (commands, bullet points) stay separate.
 - **2026-03-03**: File hyperlinks open in other pane — clicking a file path hyperlink in Claude output now opens the file tab in a different pane when 2+ panes exist, enabling side-by-side viewing. Single-pane layout still opens in the same pane.
 
+## Recently Completed (cont. 35)
+- **2026-03-04**: Window popup button swap — X button closes popup (neutral gray, was red/destructive), "Close Window" button at bottom does the tmux window close (red text). Clearer separation of dismiss vs destructive action.
+- **2026-03-04**: Bare filename hyperlinks — file links now match filenames without path separators (e.g. `server.py`, `CLAUDE.md`), resolved against tab's cwd. Previously required `/` in path or `:line` suffix.
+
 ## Active Work
 None
 
