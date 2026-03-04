@@ -189,6 +189,9 @@
 - **2026-03-03**: Settings panel — gear icon (⚙) in topbar opens dropdown with text size pill buttons (4 tiers, active highlighted) and file links ON/OFF toggle. `_fileLinksEnabled` flag guards `linkifyFilePaths()` calls; toggling re-renders all visible tabs immediately preserving scroll position. Persisted to `prefs fileLinks`. Click-outside dismisses panel. Replaces old standalone text size cycling button.
 - **2026-03-03**: Scroll to bottom on tab focus — output defaults to bottom on page refresh and tab switch. Per-tab scroll position saved (`tabStates[id].savedScrollTop`) when switching away, restored when switching back. `#topbar` got `position:relative` for settings panel absolute positioning.
 
+## Recently Completed (cont. 33)
+- **2026-03-03**: Raw view mobile formatting — three fixes: (1) trim trailing whitespace per line (removes tmux padding), (2) collapse 4+ consecutive blank lines to 3 (CC TUI fills content-to-status-bar gap with empty lines), (3) truncate `─` (U+2500) horizontal dividers >40 chars to 40 (273-char dividers wrapped into multiple rows on mobile). Also fixed box-drawing table detection in Raw view — `_tblStartRe`/`_tblEndRe` were missing the `m` (multiline) flag, so `.test(display)` only checked the first line and missed tables in the middle of output.
+
 ## Active Work
 None
 

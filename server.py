@@ -1402,8 +1402,8 @@ const SEND_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 
 // === Utility ===
 function esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
-const _tblStartRe = /^\s*\u250c[\u2500\u252c]+\u2510/;
-const _tblEndRe = /^\s*\u2514[\u2500\u2534]+\u2518/;
+const _tblStartRe = /^\s*\u250c[\u2500\u252c]+\u2510/m;
+const _tblEndRe = /^\s*\u2514[\u2500\u2534]+\u2518/m;
 const _tblSepRe = /^[\u250c\u251c\u2514][\u2500\u252c\u253c\u2534\u2510\u2524\u2518]+$/;
 function boxTableToHtml(tableLines) {
   const sections = []; let cur = [];
@@ -2731,8 +2731,16 @@ function renderOutput(raw, targetEl, state, tabId) {
   }
   if (state.rawMode) {
     targetEl.className = 'pane-output raw';
-    if (_tblStartRe.test(raw)) { targetEl.innerHTML = renderRawWithTables(raw); }
-    else { targetEl.textContent = raw; }
+    // Clean up for mobile readability: trim trailing whitespace per line,
+    // collapse excessive blank lines, truncate long horizontal dividers
+    let display = raw.split('\\n').map(l => {
+      l = l.trimEnd();
+      // Truncate CC TUI horizontal dividers (─ U+2500) that span full terminal width
+      if (l.length > 40 && /^\\u2500+$/.test(l)) l = '\\u2500'.repeat(40);
+      return l;
+    }).join('\\n').replace(/\\n{4,}/g, '\\n\\n\\n');
+    if (_tblStartRe.test(display)) { targetEl.innerHTML = renderRawWithTables(display); }
+    else { targetEl.textContent = display; }
     if (_fileLinksEnabled) linkifyFilePaths(targetEl, getTabCwd(tabId));
     return;
   }
