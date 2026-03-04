@@ -185,6 +185,10 @@
 ## Recently Completed (cont. 31)
 - **2026-03-02**: File path hyperlinks in output — file paths in Claude's responses (e.g. `server.py:42`, `src/components/App.tsx`) become clickable links that open in file tabs. Regex detects paths with directory separators or `:line` suffixes; word boundary prevents partial extension matches (`js` vs `json`). Relative paths resolved against tab's cwd from dashboard. Works in both Raw and Clean views. DOM tree walker skips `<a>`, `<pre>`, `<textarea>`, `<input>` nodes.
 
+## Recently Completed (cont. 32)
+- **2026-03-03**: Settings panel — gear icon (⚙) in topbar opens dropdown with text size pill buttons (4 tiers, active highlighted) and file links ON/OFF toggle. `_fileLinksEnabled` flag guards `linkifyFilePaths()` calls; toggling re-renders all visible tabs immediately preserving scroll position. Persisted to `prefs fileLinks`. Click-outside dismisses panel. Replaces old standalone text size cycling button.
+- **2026-03-03**: Scroll to bottom on tab focus — output defaults to bottom on page refresh and tab switch. Per-tab scroll position saved (`tabStates[id].savedScrollTop`) when switching away, restored when switching back. `#topbar` got `position:relative` for settings panel absolute positioning.
+
 ## Active Work
 None
 

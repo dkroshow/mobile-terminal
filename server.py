@@ -564,7 +564,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 
 /* --- Top bar --- */
 #topbar { background:var(--bg); padding:calc(var(--safe-top) + 6px) 12px 0;
-  display:flex; flex-direction:column; gap:0; flex-shrink:0; z-index:10; }
+  display:flex; flex-direction:column; gap:0; flex-shrink:0; z-index:10; position:relative; }
 #topbar-row { display:flex; align-items:center; gap:8px; padding-bottom:6px; }
 #hamburger { display:none; background:none; border:none; color:var(--text2);
   font-size:20px; cursor:pointer; padding:4px 8px; border-radius:8px;
@@ -579,6 +579,25 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .topbar-btn:active { transform:scale(0.96); opacity:0.8; }
 .topbar-btn.on { background:var(--accent); color:#fff; border-color:var(--accent); }
 @media (max-width:768px) { #add-pane-btn { display:none !important; } }
+#settings-btn { position:relative; }
+#settings-panel { display:none; position:absolute; top:100%; right:12px;
+  background:var(--surface); border:1px solid var(--border); border-radius:12px;
+  padding:12px; width:200px; z-index:20; box-shadow:0 8px 24px rgba(0,0,0,.4); }
+.settings-section { margin-bottom:10px; }
+.settings-section:last-child { margin-bottom:0; }
+.settings-label { font-size:11px; color:var(--text3); margin-bottom:6px; font-weight:500; }
+.settings-size-btns { display:flex; gap:4px; }
+.settings-size-btn { flex:1; height:28px; border-radius:14px; border:1px solid var(--border);
+  background:var(--bg); color:var(--text2); font-size:11px; font-weight:500;
+  font-family:inherit; cursor:pointer; transition:all .15s; }
+.settings-size-btn.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+.settings-size-btn:active { transform:scale(0.95); }
+.settings-row { display:flex; align-items:center; justify-content:space-between; }
+.settings-row span { font-size:12px; color:var(--text2); }
+.settings-toggle { height:26px; padding:0 10px; border-radius:13px; border:1px solid var(--border);
+  background:var(--bg); color:var(--text3); font-size:11px; font-weight:500;
+  font-family:inherit; cursor:pointer; transition:all .15s; }
+.settings-toggle.on { background:var(--accent); color:#fff; border-color:var(--accent); }
 
 /* --- Panes container --- */
 #panes-container { flex:1; display:flex; overflow:hidden; position:relative; }
@@ -1196,10 +1215,27 @@ a.file-link:active { opacity:0.6; }
       <button class="topbar-btn" id="master-notes-btn" onclick="toggleMasterNotes()">Notes</button>
       <button class="topbar-btn" id="fb-btn" onclick="toggleFileBrowser()">Files</button>
       <button class="topbar-btn" id="add-pane-btn" onclick="addPane()">+ Pane</button>
-      <button class="topbar-btn" id="size-btn" onclick="cycleTextSize()">A</button>
+      <button class="topbar-btn" id="settings-btn" onclick="toggleSettings()">&#9881;</button>
       <button class="topbar-btn" id="view-btn" onclick="toggleRaw()">
         <span>View: </span><span id="view-label">Raw</span>
       </button>
+    </div>
+    <div id="settings-panel">
+      <div class="settings-section">
+        <div class="settings-label">Text Size</div>
+        <div class="settings-size-btns">
+          <button class="settings-size-btn" onclick="applyTextSize(0)">A--</button>
+          <button class="settings-size-btn" onclick="applyTextSize(1)">A-</button>
+          <button class="settings-size-btn active" onclick="applyTextSize(2)">A</button>
+          <button class="settings-size-btn" onclick="applyTextSize(3)">A+</button>
+        </div>
+      </div>
+      <div class="settings-section">
+        <div class="settings-row">
+          <span>File Links</span>
+          <button class="settings-toggle on" id="file-links-toggle" onclick="toggleFileLinks()">ON</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -2697,7 +2733,7 @@ function renderOutput(raw, targetEl, state, tabId) {
     targetEl.className = 'pane-output raw';
     if (_tblStartRe.test(raw)) { targetEl.innerHTML = renderRawWithTables(raw); }
     else { targetEl.textContent = raw; }
-    linkifyFilePaths(targetEl, getTabCwd(tabId));
+    if (_fileLinksEnabled) linkifyFilePaths(targetEl, getTabCwd(tabId));
     return;
   }
   targetEl.className = 'pane-output chat';
@@ -2748,7 +2784,7 @@ function renderOutput(raw, targetEl, state, tabId) {
   if (!html)
     html = '<div class="turn assistant"><div class="turn-label">Terminal</div><div class="turn-body"><p style="color:var(--text3)">Waiting for output...</p></div></div>';
   targetEl.innerHTML = html;
-  linkifyFilePaths(targetEl, getTabCwd(tabId));
+  if (_fileLinksEnabled) linkifyFilePaths(targetEl, getTabCwd(tabId));
 }
 
 // === Pane management ===
@@ -3040,19 +3076,28 @@ function focusTab(tabId) {
   for (const p of panes) {
     if (p.tabIds.includes(tabId)) {
       const tabChanged = p.activeTabId !== tabId;
-      // Save draft text from old tab's textarea before switching
+      // Save draft text + scroll position from old tab before switching
       if (tabChanged && p.activeTabId && tabStates[p.activeTabId]) {
         const paneEl = document.getElementById('pane-' + p.id);
         const ta = paneEl && paneEl.querySelector('.pane-input textarea');
         tabStates[p.activeTabId].draft = ta ? ta.value : '';
         // Also save global textarea draft
         if (M) tabStates[p.activeTabId].globalDraft = M.value;
+        const oldOut = document.getElementById('tab-output-' + p.activeTabId);
+        if (oldOut) tabStates[p.activeTabId].savedScrollTop = oldOut.scrollTop;
       }
       p.activeTabId = tabId;
       focusPane(p.id);
       if (tabChanged && _sidebarView === 'sessions') renderSidebar();
       renderPaneTabs(p.id);
       showActiveTabOutput(p.id);
+      // Restore scroll position or scroll to bottom
+      const outEl = document.getElementById('tab-output-' + tabId);
+      if (outEl) {
+        const st = tabStates[tabId];
+        if (st && st.savedScrollTop != null) { outEl.scrollTop = st.savedScrollTop; st.savedScrollTop = null; }
+        else outEl.scrollTop = outEl.scrollHeight;
+      }
       // Toggle file-tab-active class on pane element (hides per-pane input bar)
       const paneEl = document.getElementById('pane-' + p.id);
       if (paneEl) paneEl.classList.toggle('file-tab-active', ft && ft.type === 'file');
@@ -4195,6 +4240,7 @@ const TEXT_SIZES = [
   { label: 'A+',  text: '17px', code: '15px', mono: '15px', padV: '18px', padH: '20px', gap: '14px', radius: '20px', lineH: '1.8', sbName: '17px', sbDetail: '15px', sbTiny: '13px' },
 ];
 let _textSizeIdx = 2;
+let _fileLinksEnabled = true;
 function applyTextSize(idx) {
   _textSizeIdx = idx;
   const s = TEXT_SIZES[idx];
@@ -4205,10 +4251,39 @@ function applyTextSize(idx) {
   r.setProperty('--turn-radius', s.radius); r.setProperty('--line-h', s.lineH);
   r.setProperty('--sb-name', s.sbName); r.setProperty('--sb-detail', s.sbDetail);
   r.setProperty('--sb-tiny', s.sbTiny);
-  document.getElementById('size-btn').textContent = s.label;
+  document.getElementById('settings-btn').innerHTML = '&#9881;';
+  document.querySelectorAll('.settings-size-btn').forEach((b, i) => b.classList.toggle('active', i === idx));
   try { prefs.setItem('textSize', idx); } catch(e) {}
 }
-function cycleTextSize() { applyTextSize((_textSizeIdx + 1) % TEXT_SIZES.length); }
+function toggleSettings() {
+  const p = document.getElementById('settings-panel');
+  const open = p.style.display === 'block';
+  p.style.display = open ? 'none' : 'block';
+}
+document.addEventListener('click', function(e) {
+  const p = document.getElementById('settings-panel');
+  if (!p || p.style.display !== 'block') return;
+  if (p.contains(e.target) || e.target.closest('#settings-btn')) return;
+  p.style.display = 'none';
+});
+function toggleFileLinks() {
+  _fileLinksEnabled = !_fileLinksEnabled;
+  const btn = document.getElementById('file-links-toggle');
+  btn.textContent = _fileLinksEnabled ? 'ON' : 'OFF';
+  btn.classList.toggle('on', _fileLinksEnabled);
+  try { prefs.setItem('fileLinks', _fileLinksEnabled ? '1' : '0'); } catch(e) {}
+  // Re-render all visible tabs to apply/remove links
+  for (const p of panes) {
+    if (!p.activeTabId) continue;
+    const st = tabStates[p.activeTabId];
+    const outEl = document.getElementById('tab-output-' + p.activeTabId);
+    if (st && outEl) {
+      const scrollPos = outEl.scrollTop;
+      renderOutput(st.rawContent || st.last, outEl, st, p.activeTabId);
+      outEl.scrollTop = scrollPos;
+    }
+  }
+}
 
 // === Sidebar ===
 function toggleSidebar() {
@@ -4823,6 +4898,7 @@ async function init() {
   _sidebarExpanded = prefs.getItem('sidebar:expanded') === 'true';
   if (_sidebarExpanded) document.getElementById('sb-expand-btn').innerHTML = '&#9662;';
   try { const saved = prefs.getItem('textSize'); if (saved !== null) applyTextSize(parseInt(saved)); } catch(e) {}
+  try { const fl = prefs.getItem('fileLinks'); if (fl === '0') { _fileLinksEnabled = false; const b = document.getElementById('file-links-toggle'); b.textContent = 'OFF'; b.classList.remove('on'); } } catch(e) {}
   try { const sw = prefs.getItem('sidebar:width'); if (sw) document.documentElement.style.setProperty('--sidebar-w', sw + 'px'); } catch(e) {}
   try { const so = JSON.parse(prefs.getItem('sidebar:order')); if (so) _sidebarOrder = so; } catch(e) {}
   try { const fo = JSON.parse(prefs.getItem('ft:root-order')); if (fo) _ftRootOrder = fo; } catch(e) {}
