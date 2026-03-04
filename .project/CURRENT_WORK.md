@@ -199,6 +199,9 @@
 ## Recently Completed (cont. 35)
 - **2026-03-04**: Window popup button swap — X button closes popup (neutral gray, was red/destructive), "Close Window" button at bottom does the tmux window close (red text). Clearer separation of dismiss vs destructive action.
 - **2026-03-04**: Bare filename hyperlinks — file links now match filenames without path separators (e.g. `server.py`, `CLAUDE.md`), resolved against tab's cwd. Previously required `/` in path or `:line` suffix.
+- **2026-03-04**: Pane limit raised 6 → 12 for large-screen layouts with many terminals.
+- **2026-03-04**: Cross-pane vertical split drag fix — tab-level `dragover`/`drop` handlers were calling `stopPropagation()` unconditionally, blocking pane-level split detection for cross-pane drags. Now uses `_dragSrcTabId` global (set on `dragstart`) to only stop propagation for same-pane reorder; cross-pane drags bubble through to pane handler for top/bottom split zones.
+- **2026-03-04**: Scroll-to-bottom on tab switch — `_scrollToBottom` flag in `tabStates`, set on tab creation and every `focusTab` call. `pollTab` honors the flag even when content hasn't changed, ensuring scroll happens after the element is visible and laid out. Removed per-tab scroll position save/restore (always scrolls to bottom now).
 
 ## Active Work
 None

@@ -1382,6 +1382,7 @@ const prefs = {
 // === Data model ===
 let panes = [];         // [{ id, tabIds, activeTabId }]
 let activePaneId = null;
+let _dragSrcTabId = null;
 let allTabs = {};       // tabId -> { session, windowIndex, windowName }
 let tabStates = {};     // tabId -> { rawContent, last, rawMode, pendingMsg, pendingTime, awaitingResponse, lastOutputChange, pollInterval }
 let _nextPaneId = 1;
@@ -2816,7 +2817,7 @@ function renderOutput(raw, targetEl, state, tabId) {
 
 // === Pane management ===
 function createPane(parentEl) {
-  if (panes.length >= 6) return null;
+  if (panes.length >= 12) return null;
   const id = _nextPaneId++;
   panes.push({ id, tabIds: [], activeTabId: null });
   const el = document.createElement('div');
@@ -2880,12 +2881,12 @@ function createPane(parentEl) {
     const rect = el.getBoundingClientRect();
     const relY = (e.clientY - rect.top) / rect.height;
     const indicator = el.querySelector('.drop-indicator');
-    if (relY > 0.65 && panes.length < 6) {
+    if (relY > 0.65 && panes.length < 12) {
       indicator.style.top = '50%'; indicator.style.bottom = '0';
       indicator.style.display = 'block';
       el.classList.remove('drag-over');
       el._dropZone = 'bottom';
-    } else if (relY < 0.35 && panes.length < 6 && el.parentElement.classList.contains('pane-stack')) {
+    } else if (relY < 0.35 && panes.length < 12 && el.parentElement.classList.contains('pane-stack')) {
       indicator.style.top = '0'; indicator.style.bottom = '50%';
       indicator.style.display = 'block';
       el.classList.remove('drag-over');
@@ -2915,7 +2916,7 @@ function createPane(parentEl) {
 }
 
 function splitPaneVertically(existingPaneId, tabId, position) {
-  if (panes.length >= 6) return;
+  if (panes.length >= 12) return;
   const existingEl = document.getElementById('pane-' + existingPaneId);
   if (!existingEl) return;
   let stack = existingEl.parentElement;
@@ -2997,6 +2998,7 @@ function createTab(session, windowIndex, windowName, targetPaneId) {
     pendingMsg: null, pendingTime: 0,
     awaitingResponse: false, lastOutputChange: 0,
     pollInterval: null, ccStatus: null,
+    _scrollToBottom: true,
   };
   pane.tabIds.push(id);
 
@@ -3109,21 +3111,12 @@ function focusTab(tabId) {
         tabStates[p.activeTabId].draft = ta ? ta.value : '';
         // Also save global textarea draft
         if (M) tabStates[p.activeTabId].globalDraft = M.value;
-        const oldOut = document.getElementById('tab-output-' + p.activeTabId);
-        if (oldOut) tabStates[p.activeTabId].savedScrollTop = oldOut.scrollTop;
       }
       p.activeTabId = tabId;
       focusPane(p.id);
       if (tabChanged && _sidebarView === 'sessions') renderSidebar();
       renderPaneTabs(p.id);
-      showActiveTabOutput(p.id);
-      // Restore scroll position or scroll to bottom
-      const outEl = document.getElementById('tab-output-' + tabId);
-      if (outEl) {
-        const st = tabStates[tabId];
-        if (st && st.savedScrollTop != null) { outEl.scrollTop = st.savedScrollTop; st.savedScrollTop = null; }
-        else outEl.scrollTop = outEl.scrollHeight;
-      }
+      showActiveTabOutput(p.id, true);
       // Toggle file-tab-active class on pane element (hides per-pane input bar)
       const paneEl = document.getElementById('pane-' + p.id);
       if (paneEl) paneEl.classList.toggle('file-tab-active', ft && ft.type === 'file');
@@ -3253,31 +3246,37 @@ function renderPaneTabs(paneId) {
       e.dataTransfer.setData('text/plain', tab.dataset.tabId);
       e.dataTransfer.effectAllowed = 'move';
       tab.style.opacity = '0.5';
+      _dragSrcTabId = parseInt(tab.dataset.tabId);
     });
     tab.addEventListener('dragend', () => {
       tab.style.opacity = '';
+      _dragSrcTabId = null;
       tabBar.querySelectorAll('.drag-over-left,.drag-over-right').forEach(t => { t.classList.remove('drag-over-left','drag-over-right'); });
     });
     tab.addEventListener('dragover', e => {
       e.preventDefault();
-      e.stopPropagation();
-      e.dataTransfer.dropEffect = 'move';
-      tabBar.querySelectorAll('.drag-over-left,.drag-over-right').forEach(t => { t.classList.remove('drag-over-left','drag-over-right'); });
-      const rect = tab.getBoundingClientRect();
-      const onLeft = e.clientX < rect.left + rect.width / 2;
-      tab.classList.add(onLeft ? 'drag-over-left' : 'drag-over-right');
+      const dstTabId = parseInt(tab.dataset.tabId);
+      const samePane = _dragSrcTabId && panes.some(p => p.tabIds.includes(_dragSrcTabId) && p.tabIds.includes(dstTabId));
+      if (samePane) {
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = 'move';
+        tabBar.querySelectorAll('.drag-over-left,.drag-over-right').forEach(t => { t.classList.remove('drag-over-left','drag-over-right'); });
+        const rect = tab.getBoundingClientRect();
+        const onLeft = e.clientX < rect.left + rect.width / 2;
+        tab.classList.add(onLeft ? 'drag-over-left' : 'drag-over-right');
+      }
     });
     tab.addEventListener('dragleave', () => { tab.classList.remove('drag-over-left','drag-over-right'); });
     tab.addEventListener('drop', e => {
-      e.preventDefault();
-      e.stopPropagation();
       const onLeft = tab.classList.contains('drag-over-left');
       tab.classList.remove('drag-over-left','drag-over-right');
       const srcTabId = parseInt(e.dataTransfer.getData('text/plain'));
       const dstTabId = parseInt(tab.dataset.tabId);
       if (srcTabId === dstTabId) return;
       const pane = panes.find(p => p.tabIds.includes(srcTabId) && p.tabIds.includes(dstTabId));
-      if (!pane) return; // cross-pane drops handled by pane-level handler
+      if (!pane) return; // cross-pane drops bubble to pane-level handler
+      e.preventDefault();
+      e.stopPropagation();
       const srcIdx = pane.tabIds.indexOf(srcTabId);
       pane.tabIds.splice(srcIdx, 1);
       let dstIdx = pane.tabIds.indexOf(dstTabId);
@@ -3289,7 +3288,7 @@ function renderPaneTabs(paneId) {
   });
 }
 
-function showActiveTabOutput(paneId) {
+function showActiveTabOutput(paneId, scrollToBottom) {
   const pane = panes.find(p => p.id === paneId);
   if (!pane) return;
   const paneEl = document.getElementById('pane-' + paneId);
@@ -3297,7 +3296,14 @@ function showActiveTabOutput(paneId) {
   paneEl.querySelectorAll('.pane-output').forEach(o => o.style.display = 'none');
   if (pane.activeTabId) {
     const outEl = document.getElementById('tab-output-' + pane.activeTabId);
-    if (outEl) outEl.style.display = '';
+    if (outEl) {
+      outEl.style.display = '';
+      if (scrollToBottom) {
+        const st = tabStates[pane.activeTabId];
+        if (st) st._scrollToBottom = true;
+        outEl.scrollTop = outEl.scrollHeight;
+      }
+    }
   }
   // Ensure file-tab-active class matches active tab type
   const at = pane.activeTabId && allTabs[pane.activeTabId];
@@ -4103,17 +4109,21 @@ async function pollTab(tabId) {
       const dot = document.querySelector('[data-tab-dot="' + tabId + '"]');
       if (dot) dot.className = 'pane-tab-dot none';
     }
-    if (d.output !== state.last) {
+    const contentChanged = d.output !== state.last;
+    if (contentChanged) {
       state.lastOutputChange = Date.now();
       state.last = d.output; state.rawContent = d.output;
+    }
+    if (contentChanged || state._scrollToBottom) {
       const outEl = document.getElementById('tab-output-' + tabId);
       if (!outEl) return;
       // Skip DOM update while user is selecting text (prevents selection jumping)
       const sel = window.getSelection();
       if (sel && sel.type === 'Range' && outEl.contains(sel.anchorNode)) return;
-      const atBottom = outEl.scrollHeight - outEl.scrollTop - outEl.clientHeight < 80;
-      renderOutput(d.output, outEl, state, tabId);
+      const atBottom = state._scrollToBottom || (outEl.scrollHeight - outEl.scrollTop - outEl.clientHeight < 80);
+      if (contentChanged) renderOutput(d.output, outEl, state, tabId);
       if (atBottom) outEl.scrollTop = outEl.scrollHeight;
+      state._scrollToBottom = false;
     }
   } catch(e) {}
 }
