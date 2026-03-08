@@ -203,6 +203,11 @@
 - **2026-03-04**: Cross-pane vertical split drag fix — tab-level `dragover`/`drop` handlers were calling `stopPropagation()` unconditionally, blocking pane-level split detection for cross-pane drags. Now uses `_dragSrcTabId` global (set on `dragstart`) to only stop propagation for same-pane reorder; cross-pane drags bubble through to pane handler for top/bottom split zones.
 - **2026-03-04**: Scroll-to-bottom on tab switch — `_scrollToBottom` flag in `tabStates`, set on tab creation and every `focusTab` call. `pollTab` honors the flag even when content hasn't changed, ensuring scroll happens after the element is visible and laid out. Removed per-tab scroll position save/restore (always scrolls to bottom now).
 
+## Recently Completed (cont. 36)
+- **2026-03-07**: Fix Raw view word-wrap rejoining — three issues fixed: (1) `[a-z]` → `[a-zA-Z]` so uppercase continuations (e.g. "1026 / Carolina St?") are joined, (2) `max - 4` → `max * 0.85` threshold since CC word-wraps at word boundaries leaving lines well short of terminal width, (3) `  \S` → `(  \S|⏺|❯)` on prev-line check since CC response/prompt first lines start with `⏺`/`❯`, not 2-space indent. Validated with Python simulation against live capture-pane output.
+- **2026-03-07**: File tab tooltip — hovering a file tab name shows the full filepath via `title` attribute.
+- **2026-03-07**: Add-pane button on mobile — was hidden with `display:none !important` at ≤768px. Now visible with compact sizing (`font-size:12px; padding:2px 6px`).
+
 ## Active Work
 None
 

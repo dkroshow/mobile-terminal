@@ -580,7 +580,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   flex-shrink:0; white-space:nowrap; }
 .topbar-btn:active { transform:scale(0.96); opacity:0.8; }
 .topbar-btn.on { background:var(--accent); color:#fff; border-color:var(--accent); }
-@media (max-width:768px) { #add-pane-btn { display:none !important; } }
+@media (max-width:768px) { #add-pane-btn { font-size:12px; padding:2px 6px; } }
 #settings-btn { position:relative; }
 #settings-panel { display:none; position:absolute; top:100%; right:12px;
   background:var(--surface); border:1px solid var(--border); border-radius:12px;
@@ -2746,15 +2746,16 @@ function renderOutput(raw, targetEl, state, tabId) {
       if (l.length > 40 && /^\\u2500+$/.test(l)) l = '\\u2500'.repeat(40);
       return l;
     });
-    // Join CC TUI word-wrap continuations: lines that hit the terminal wrap width
-    // followed by indented lowercase continuation = same sentence split at wrap point.
-    // Detect wrap width dynamically (max line length = terminal content width).
-    const wrapW = Math.max(...dLines.map(l => l.length)) - 4;
+    // Join CC TUI word-wrap continuations: lines near the terminal wrap width
+    // followed by indented continuation = same sentence split at wrap point.
+    // Use 85% of max line length as threshold — CC word-wraps at word boundaries,
+    // so lines can end well short of terminal width (up to longest-word gap).
+    const wrapW = Math.max(...dLines.map(l => l.length)) * 0.85;
     let jLines = [dLines[0]];
     for (let k = 1; k < dLines.length; k++) {
       const prev = jLines[jLines.length - 1];
       const cur = dLines[k];
-      if (prev.length >= wrapW && /^  \\S/.test(prev) && /^  [a-z]/.test(cur)) {
+      if (prev.length >= wrapW && /^(  \\S|\\u23FA|\\u276F)/.test(prev) && /^  [a-zA-Z]/.test(cur)) {
         jLines[jLines.length - 1] = prev + ' ' + cur.trimStart();
       } else { jLines.push(cur); }
     }
@@ -3218,7 +3219,7 @@ function renderPaneTabs(paneId) {
       + ' data-tab-id="' + tid + '"'
       + ' onclick="focusTab(' + tid + ')">'
       + '<span class="pane-tab-dot ' + dotClass + '" data-tab-dot="' + tid + '"></span>'
-      + '<span class="pane-tab-name">' + esc(tab.windowName) + '</span>'
+      + '<span class="pane-tab-name"' + (isFile ? ' title="' + esc(tab.filePath) + '"' : '') + '>' + esc(tab.windowName) + '</span>'
       + '<span class="pane-tab-close" onclick="event.stopPropagation();closeTab(' + tid + ')">&times;</span>'
       + '</div>';
   }
