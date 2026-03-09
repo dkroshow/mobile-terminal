@@ -522,15 +522,14 @@ def get_dashboard() -> dict:
                 key = f"{s['name']}:{w['index']}"
                 gauge = _gauge_cache.get(key)
                 if gauge:
-                    w["gauge_context_pct"] = gauge["pct_used"]
+                    w["gauge_context_pct"] = round(100 - gauge["pct_used"], 1)  # remaining %
                     w["gauge_burn_rate"] = gauge["burn_rate"]
                     w["gauge_est_turns"] = gauge["est_turns_remaining"]
                     w["gauge_total_turns"] = gauge["total_turns"]
-                    # Cross-validate: gauge (% used) + CC status bar (% remaining) ≈ 100
+                    # Cross-validate: gauge remaining vs CC status bar remaining
                     cc_left = w.get("cc_context_pct")
                     if cc_left is not None:
-                        expected_used = 100 - cc_left
-                        drift = abs(gauge["pct_used"] - expected_used)
+                        drift = abs(w["gauge_context_pct"] - cc_left)
                         w["gauge_drift"] = round(drift, 1)
 
     return {"sessions": list(sessions.values())}
@@ -1044,10 +1043,9 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   font-size:var(--mono-size); line-height:1.6; white-space:pre-wrap;
   word-break:break-word; color:#999; }
 .pane-output.chat { display:flex; flex-direction:column; padding:10px 14px 20px; }
-.pane-gauge { position:absolute; bottom:52px; right:10px; z-index:4;
-  font-size:11px; line-height:1.4; color:var(--text2); pointer-events:none;
-  text-align:right; font-variant-numeric:tabular-nums;
-  background:rgba(25,26,27,0.85); padding:3px 7px; border-radius:6px; }
+.pane-gauge { display:none; font-size:11px; line-height:1.2; color:var(--text3);
+  text-align:right; font-variant-numeric:tabular-nums; padding:0 4px 2px; }
+.pane-gauge:not(:empty) { display:block; }
 .pane-gauge .pg-pct { font-weight:600; color:var(--text); }
 .pane-gauge .pg-pct.low { color:var(--orange); }
 .pane-gauge .pg-pct.critical { color:var(--red); }
@@ -1508,6 +1506,7 @@ a.file-link:active { opacity:0.6; }
   <div id="panes-container"></div>
 
   <div id="bar">
+    <div id="global-gauge" class="pane-gauge"></div>
     <div id="input-row">
       <textarea id="msg" rows="1" placeholder="Enter command..."
         autocomplete="off" enterkeyhint="send"></textarea>
@@ -2831,7 +2830,7 @@ function updateSidebarStatus(session, windowIndex, ccStatus, contextPct, permMod
     if (contextPct != null) {
       let ctx = lbl.querySelector('.sb-ctx');
       if (!ctx) { ctx = document.createElement('span'); lbl.prepend(ctx); }
-      const cls = contextPct <= 10 ? 'critical' : contextPct <= 25 ? 'low' : '';
+      const cls = _ctxCls(contextPct);
       ctx.className = 'sb-ctx' + (cls ? ' ' + cls : '');
       ctx.textContent = contextPct + '%';
     }
@@ -3091,6 +3090,7 @@ function createPane(parentEl) {
   el.innerHTML = '<div class="pane-tab-bar"></div>'
     + '<div class="pane-placeholder">Open a window from the sidebar</div>'
     + '<div class="pane-input">'
+    + '<div class="pane-gauge" data-pane-gauge="' + id + '"></div>'
     + '<div class="pane-input-row"><textarea rows="1" placeholder="Enter command..."'
     + ' autocomplete="off" enterkeyhint="send"></textarea>'
     + '<button class="pane-send" aria-label="Send">' + SEND_SVG + '</button></div>'
@@ -3115,7 +3115,6 @@ function createPane(parentEl) {
     + '<button class="pill" onclick="sendResumeActive()">Resume</button>'
     + '</div>'
     + '</div>'
-    + '<div class="pane-gauge" data-pane-gauge="' + id + '"></div>'
     + '<div class="drop-indicator"></div>';
   (parentEl || panesContainer).appendChild(el);
   // Pane input handlers
@@ -3577,27 +3576,37 @@ function showActiveTabOutput(paneId, scrollToBottom) {
   updatePaneGauge(paneId);
 }
 
+// Context % remaining: high=green, mid=orange, low=red
+function _ctxCls(pct) { return pct <= 10 ? 'critical' : pct <= 25 ? 'low' : ''; }
+
+function _gaugeHtml(tab) {
+  if (!tab || tab.type === 'file' || !_dashboardData) return '';
+  const sess = _dashboardData.sessions.find(s => s.name === tab.session);
+  const win = sess && sess.windows.find(w => w.index === tab.windowIndex);
+  if (!win || win.gauge_context_pct == null) return '';
+  const pct = Math.round(win.gauge_context_pct);
+  const cls = _ctxCls(pct);
+  let html = '<span class="pg-pct' + (cls ? ' ' + cls : '') + '">' + pct + '% context left</span>';
+  if (win.gauge_est_turns != null) {
+    html += ' <span class="pg-detail">~' + win.gauge_est_turns + ' turns left</span>';
+  }
+  return html;
+}
+
 function updatePaneGauge(paneId) {
   const el = document.querySelector('[data-pane-gauge="' + paneId + '"]');
   if (!el) return;
   const pane = panes.find(p => p.id === paneId);
-  if (!pane || !pane.activeTabId) { el.innerHTML = ''; return; }
-  const tab = allTabs[pane.activeTabId];
-  if (!tab || tab.type === 'file' || !_dashboardData) { el.innerHTML = ''; return; }
-  const sess = _dashboardData.sessions.find(s => s.name === tab.session);
-  const win = sess && sess.windows.find(w => w.index === tab.windowIndex);
-  if (!win || win.gauge_context_pct == null) { el.innerHTML = ''; return; }
-  const pct = Math.round(win.gauge_context_pct);
-  const cls = pct >= 75 ? ' critical' : pct >= 50 ? ' low' : '';
-  let html = '<span class="pg-pct' + cls + '">' + pct + '%</span>';
-  if (win.gauge_est_turns != null) {
-    html += '<br><span class="pg-detail">~' + win.gauge_est_turns + ' turns</span>';
-  }
-  el.innerHTML = html;
+  el.innerHTML = (pane && pane.activeTabId) ? _gaugeHtml(allTabs[pane.activeTabId]) : '';
 }
 
 function updateAllPaneGauges() {
   for (const p of panes) updatePaneGauge(p.id);
+  // Update global bar gauge (single-pane mode)
+  const gg = document.getElementById('global-gauge');
+  if (gg && panes.length === 1 && panes[0].activeTabId) {
+    gg.innerHTML = _gaugeHtml(allTabs[panes[0].activeTabId]);
+  } else if (gg) { gg.innerHTML = ''; }
 }
 
 // === Layout persistence ===
@@ -4738,11 +4747,11 @@ function renderSidebarSession(s, activeTab, isHidden) {
     let status = '';
     if (w.gauge_context_pct != null) {
       const pct = Math.round(w.gauge_context_pct);
-      const cls = pct >= 75 ? 'critical' : pct >= 50 ? 'low' : '';
-      status = '<span class="sb-ctx ' + cls + '">' + pct + '%' + (w.gauge_drift > 10 ? '!' : '') + '</span>';
+      const cls = _ctxCls(pct);
+      status = '<span class="sb-ctx ' + (cls || '') + '">' + pct + '%' + (w.gauge_drift > 10 ? '!' : '') + '</span>';
     } else if (w.cc_context_pct != null) {
-      const cls = w.cc_context_pct <= 10 ? 'critical' : w.cc_context_pct <= 25 ? 'low' : '';
-      status = '<span class="sb-ctx ' + cls + '">' + w.cc_context_pct + '%</span>';
+      const cls = _ctxCls(w.cc_context_pct);
+      status = '<span class="sb-ctx ' + (cls || '') + '">' + w.cc_context_pct + '%</span>';
     }
     const age = ageFromTs(w.activity_ts);
     const wid_age = esc(s.name) + ':' + w.index;
@@ -4946,11 +4955,12 @@ function openWD(session, windowIndex) {
     }
     if (win.gauge_context_pct != null) {
       const gp = win.gauge_context_pct;
-      const barColor = gp >= 75 ? 'var(--red)' : gp >= 50 ? 'var(--orange)' : 'var(--green)';
+      const pctRemaining = Math.round(gp);
+      const barColor = pctRemaining <= 10 ? 'var(--red)' : pctRemaining <= 25 ? 'var(--orange)' : 'var(--green)';
       html += '<div class="wd-row"><span class="wd-label">Context</span><span class="wd-value">'
-        + '<span style="margin-right:8px">' + Math.round(gp) + '% used</span>'
+        + '<span style="margin-right:8px">' + pctRemaining + '% left</span>'
         + '<span style="display:inline-block;width:80px;height:6px;background:var(--surface);border-radius:3px;vertical-align:middle">'
-        + '<span style="display:block;width:' + Math.round(gp) + '%;height:100%;background:' + barColor + ';border-radius:3px"></span>'
+        + '<span style="display:block;width:' + pctRemaining + '%;height:100%;background:' + barColor + ';border-radius:3px"></span>'
         + '</span></span></div>';
       if (win.gauge_burn_rate > 0) {
         html += '<div class="wd-row"><span class="wd-label">Burn rate</span><span class="wd-value">~' + win.gauge_burn_rate.toLocaleString() + ' tok/turn</span></div>';
@@ -4961,13 +4971,13 @@ function openWD(session, windowIndex) {
       if (win.gauge_drift != null) {
         const driftColor = win.gauge_drift > 10 ? 'var(--red)' : 'var(--orange)';
         html += '<div class="wd-row"><span class="wd-label">Gauge drift</span><span class="wd-value" style="color:' + driftColor + '">'
-          + win.gauge_drift + ' pts (gauge ' + Math.round(gp) + '% vs CC ' + (100 - win.cc_context_pct) + '%)</span></div>';
+          + win.gauge_drift + ' pts (gauge ' + pctRemaining + '% vs CC ' + win.cc_context_pct + '%)</span></div>';
       }
     } else {
       const pct = win.cc_context_pct;
       const ctxLabel = pct != null ? pct + '% left' : 'Healthy';
       const barColor = pct != null && pct <= 10 ? 'var(--red)' : pct != null && pct <= 25 ? 'var(--orange)' : 'var(--green)';
-      const barWidth = pct != null ? (100 - pct) : 0;
+      const barWidth = pct != null ? pct : 0;
       html += '<div class="wd-row"><span class="wd-label">Context</span><span class="wd-value">'
         + '<span style="margin-right:8px">' + ctxLabel + '</span>'
         + '<span style="display:inline-block;width:80px;height:6px;background:var(--surface);border-radius:3px;vertical-align:middle">'

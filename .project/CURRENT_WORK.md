@@ -1,6 +1,7 @@
 # Current Work
 
 ## Recently Completed
+- **2026-03-09**: Context gauge UX — moved gauge from floating overlay to inside input bar (above send button); fixed % semantics (all "remaining" now, matching Claude's model); unified color coding via `_ctxCls()` (>25%=default, ≤25%=orange, ≤10%=red); added global bar gauge for single-pane mode
 - **2026-03-08**: Context gauge integration — inlined JSONL-based context window utilization into server.py (avoids subprocess to gauge.py which hung due to session resolver). Per-window matching via TTY→Claude PID→tasks UUID→JSONL. Sidebar shows per-window context %, pane overlay shows "N% / ~M turns", details modal shows burn rate + est turns. Cross-validation (gauge drift) when both gauge and CC status bar data available. CLAUDE.md updated with cross-project role section.
 - **2026-03-07**: Fix Raw view word-wrap rejoining (3 issues), file tab tooltip, mobile add-pane button
 - **2026-03-04**: Window popup button swap, bare filename hyperlinks, pane limit 6→12, cross-pane drag fix, scroll-to-bottom on tab switch
@@ -8,9 +9,15 @@
 See `.project/PAST_WORK.md` for older history.
 
 ## Active Work
-None — gauge integration is uncommitted (337 lines in server.py, 9 lines in CLAUDE.md)
+None
 
 ## Session Notes
+
+### Session 2026-03-09 (gauge UX + % consistency)
+- `gauge_context_pct` was "% used" (0=fresh, 100=full) but `cc_context_pct` was "% remaining" (100=fresh, 0=full) — inverted at server level (`100 - pct_used`) so both are "remaining"
+- Color coding was inconsistent: gauge path used ≥75/≥50 thresholds (treating value as "used"), CC path used ≤10/≤25 (treating as "remaining"). Unified via `_ctxCls(pct)` helper
+- Gauge moved from `.pane-gauge` absolute overlay to inside `.pane-input` div (before input-row). Also added `#global-gauge` to `#bar` for single-pane mode
+- Details modal bar now fills to show remaining (was filling to show used), labels say "X% left"
 
 ### Session 2026-03-08 (gauge integration)
 - Gauge data inlined (~200 lines) rather than subprocess to `gauge.py` — session resolver's `lsof -p` per process hangs with many panes
