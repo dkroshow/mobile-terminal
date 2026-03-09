@@ -73,6 +73,15 @@ launchctl load ~/Library/LaunchAgents/com.kd.mobile-terminal.plist
 tail -f /tmp/mobile-terminal.log
 ```
 
+## Cross-Project Role
+
+mobile-terminal provides **HTTP APIs** consumed by other repos. See `~/Code/james/docs/VISION.md` → "Cross-Project Architecture" for the full repo boundary contract.
+
+Key APIs consumed externally:
+- `GET /api/dashboard` — CC session state (status, context %, CWD, gauge metrics) — used by james
+- `POST /api/send` — send commands to CC sessions — used by james Telegram bot bridge
+- `GET /api/output` — read CC session output — used by james Telegram bot bridge
+
 ## Constraints
 - Single file is fine (current pattern), or can split if needed
 - No JS frameworks — keep it vanilla or minimal

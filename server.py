@@ -29,6 +29,241 @@ NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
 _notify_pending = {}   # "session:window" → {"window_name": str, "saw_busy": False}
 _notify_sent = {}      # "session:window" → epoch (dedup window)
 
+# Context gauge — JSONL-based context window utilization
+# Inline implementation (no subprocess) — reads ~/.claude/projects/*/JSONL directly.
+# Matches gauge.py logic from claude-kit but avoids the session resolver overhead.
+# Per-window matching via TTY: tmux pane_tty → Claude PID (via lsof fd0) → tasks UUID → JSONL.
+_gauge_cache = {}      # "session:window" → metrics dict
+_gauge_cache_time = 0  # epoch of last refresh
+GAUGE_CACHE_TTL = 30   # seconds
+GAUGE_THRESHOLD = 165_000  # empirical compression threshold (tokens)
+
+
+def _gauge_extract_usage(jsonl_path: str) -> list:
+    """Parse JSONL transcript, return per-turn usage [{total_input, output, timestamp}]."""
+    usage = []
+    with open(jsonl_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if entry.get("type") != "assistant":
+                continue
+            u = entry.get("message", {}).get("usage", {})
+            if not u:
+                continue
+            total = (u.get("input_tokens", 0) or 0) + \
+                    (u.get("cache_read_input_tokens", 0) or 0) + \
+                    (u.get("cache_creation_input_tokens", 0) or 0)
+            if total == 0:
+                continue
+            usage.append({"total_input": total, "output": u.get("output_tokens", 0) or 0,
+                          "timestamp": entry.get("timestamp")})
+    return usage
+
+
+def _gauge_compute(usage: list, threshold: int = GAUGE_THRESHOLD) -> dict:
+    """Compute context gauge metrics from usage data."""
+    if not usage:
+        return None
+    current = usage[-1]["total_input"]
+    remaining = max(0, threshold - current)
+    pct = current / threshold * 100
+    burn = 0
+    recent = usage[-10:]
+    if len(recent) >= 2:
+        burn = (recent[-1]["total_input"] - recent[0]["total_input"]) / (len(recent) - 1)
+    est = int(remaining / burn) if burn > 0 else None
+    compressed = any(usage[i]["total_input"] < usage[i-1]["total_input"] - 1000
+                     for i in range(1, len(usage)))
+    return {"current_size": current, "threshold": threshold, "remaining": remaining,
+            "pct_used": round(pct, 1), "burn_rate": round(burn),
+            "est_turns_remaining": est, "total_turns": len(usage),
+            "compression_detected": compressed}
+
+
+def _refresh_gauge_cache():
+    """Build per-window gauge metrics by matching Claude PIDs to JSONL transcripts.
+
+    Pipeline:
+    1. tmux list-panes → pane_tty + pane_pid per window
+    2. ps process tree → find Claude child of each shell
+    3. lsof fd0 → Claude PID → TTY (to match back to pane)
+    4. lsof tasks → Claude PID → UUID → JSONL path
+    5. Fallback: for unmatched PIDs, correlate JSONL mtime with process age
+    """
+    global _gauge_cache, _gauge_cache_time
+    now = time.time()
+    if now - _gauge_cache_time < GAUGE_CACHE_TTL:
+        return
+    _gauge_cache_time = now
+
+    try:
+        cache = {}
+
+        # Step 1: Get tmux panes with TTY and activity timestamp
+        r = _run(["tmux", "list-panes", "-a", "-F",
+                   "#{session_name}\t#{window_index}\t#{pane_tty}\t#{pane_pid}\t#{pane_current_path}\t#{window_activity}"],
+                  capture_output=True, text=True)
+        if not r.stdout.strip():
+            return
+        pane_by_tty = {}   # tty → (session, window, shell_pid, cwd)
+        pane_by_pid = {}   # shell_pid → (session, window, tty, cwd, activity)
+        for line in r.stdout.strip().split("\n"):
+            parts = line.split("\t")
+            if len(parts) < 6:
+                continue
+            sname, widx, tty, spid, cwd, wact = parts
+            try:
+                activity = int(wact)
+            except ValueError:
+                activity = 0
+            pane_by_tty[tty] = (sname, int(widx), int(spid), cwd)
+            pane_by_pid[int(spid)] = (sname, int(widx), tty, cwd, activity)
+
+        # Step 2: Build process tree, find Claude children
+        r2 = _run(["ps", "-eo", "pid,ppid,comm"], capture_output=True, text=True)
+        if not r2.stdout.strip():
+            return
+        child_map = {}   # ppid → [(child_pid, comm)]
+        for line in r2.stdout.strip().split("\n")[1:]:
+            parts = line.split()
+            if len(parts) >= 3:
+                try:
+                    child_map.setdefault(int(parts[1]), []).append((int(parts[0]), parts[2]))
+                except ValueError:
+                    pass
+
+        claude_pids = []   # (claude_pid, shell_pid)
+        for spid in pane_by_pid:
+            for cpid, comm in child_map.get(spid, []):
+                if "claude" in comm.lower():
+                    claude_pids.append((cpid, spid))
+                    break
+
+        if not claude_pids:
+            _gauge_cache = cache
+            return
+
+        # Step 3+4: Single lsof call — get TTY (fd0) and tasks UUID for all Claude PIDs
+        pid_str = ",".join(str(cp) for cp, _ in claude_pids)
+        r3 = subprocess.run(["lsof", "-p", pid_str], capture_output=True, text=True, timeout=5)
+        pid_to_tty = {}    # claude_pid → tty
+        pid_to_uuid = {}   # claude_pid → session UUID
+        for line in (r3.stdout or "").split("\n"):
+            parts = line.split()
+            if len(parts) < 9:
+                continue
+            try:
+                pid = int(parts[1])
+            except ValueError:
+                continue
+            fname = parts[-1]
+            if parts[3] == "0u" and fname.startswith("/dev/tty"):
+                pid_to_tty[pid] = fname
+            elif "/.claude/tasks/" in fname:
+                # Extract UUID from path like /Users/kd/.claude/tasks/<uuid>
+                m = re.search(r'/\.claude/tasks/([0-9a-f-]{36})', fname)
+                if m:
+                    pid_to_uuid[pid] = m.group(1)
+
+        # Step 5: Match Claude PID → pane → JSONL
+        projects_dir = Path.home() / ".claude" / "projects"
+        cutoff = now - 86400
+
+        # Build slug → active JSONLs map (with birthtime for matching)
+        slug_jsonls = {}   # slug → [(path, mtime, stem, birthtime)]
+        if projects_dir.is_dir():
+            for pdir in projects_dir.iterdir():
+                if not pdir.is_dir():
+                    continue
+                for jf in pdir.glob("*.jsonl"):
+                    st = jf.stat()
+                    if st.st_mtime >= cutoff:
+                        bt = getattr(st, 'st_birthtime', st.st_mtime)
+                        slug_jsonls.setdefault(pdir.name, []).append(
+                            (str(jf), st.st_mtime, jf.stem, bt))
+
+        # For each Claude PID, find its pane and JSONL
+        for cpid, spid in claude_pids:
+            pane_info = pane_by_pid.get(spid)
+            if not pane_info:
+                continue
+            sname, widx, tty, cwd, _act = pane_info
+            key = f"{sname}:{widx}"
+            slug = cwd.replace("/", "-")
+            jsonls = slug_jsonls.get(slug, [])
+            if not jsonls:
+                continue
+
+            # Try tasks UUID match first
+            uuid = pid_to_uuid.get(cpid)
+            matched_path = None
+            if uuid:
+                for path, mt, stem, bt in jsonls:
+                    if stem == uuid:
+                        matched_path = path
+                        break
+
+            # Fallback: if only one active JSONL, use it
+            if not matched_path and len(jsonls) == 1:
+                matched_path = jsonls[0][0]
+
+            if matched_path:
+                usage = _gauge_extract_usage(matched_path)
+                metrics = _gauge_compute(usage)
+                if metrics:
+                    metrics["session_id"] = Path(matched_path).stem
+                    metrics["matched"] = "uuid" if uuid else "single"
+                    cache[key] = metrics
+
+        # Second pass: for unmatched panes, match by JSONL mtime ↔ window activity
+        # Within a project, sort unmatched windows by tmux activity and
+        # unmatched JSONLs by mtime, then pair them up (most active → most recent)
+        unmatched_by_slug = {}  # slug → [(key, activity)]
+        for cpid, spid in claude_pids:
+            pane_info = pane_by_pid.get(spid)
+            if not pane_info:
+                continue
+            sname, widx, tty, cwd, activity = pane_info
+            key = f"{sname}:{widx}"
+            if key in cache:
+                continue
+            slug = cwd.replace("/", "-")
+            # Prefer _last_interaction (user-initiated) over tmux activity (noisy for CC)
+            act = _last_interaction.get(key, activity)
+            unmatched_by_slug.setdefault(slug, []).append((key, act))
+
+        for slug, pane_list in unmatched_by_slug.items():
+            jsonls = slug_jsonls.get(slug, [])
+            matched_uuids = {cache[k]["session_id"] for k in cache
+                             if cache[k].get("session_id")}
+            available = [(p, mt, stem, bt) for p, mt, stem, bt in jsonls
+                         if stem not in matched_uuids]
+            if not available:
+                continue
+            # Sort both by recency, pair up
+            available.sort(key=lambda x: x[1], reverse=True)  # by mtime
+            pane_list.sort(key=lambda x: x[1], reverse=True)  # by activity
+            for i, (key, act) in enumerate(pane_list):
+                if i >= len(available):
+                    break
+                path = available[i][0]
+                usage = _gauge_extract_usage(path)
+                metrics = _gauge_compute(usage)
+                if metrics:
+                    metrics["session_id"] = available[i][2]
+                    metrics["matched"] = "activity"
+                    cache[key] = metrics
+
+        _gauge_cache = cache
+    except Exception:
+        pass  # Keep stale cache on error
+
 
 ANSI_RE = re.compile(
     r'\x1b\[[0-9;]*[a-zA-Z]'
@@ -279,6 +514,25 @@ def get_dashboard() -> dict:
             "preview": preview_short,
             "activity_ts": act_ts,
         })
+    # Enrich with gauge data (context window utilization from JSONL transcripts)
+    _refresh_gauge_cache()
+    if _gauge_cache:
+        for s in sessions.values():
+            for w in s["windows"]:
+                key = f"{s['name']}:{w['index']}"
+                gauge = _gauge_cache.get(key)
+                if gauge:
+                    w["gauge_context_pct"] = gauge["pct_used"]
+                    w["gauge_burn_rate"] = gauge["burn_rate"]
+                    w["gauge_est_turns"] = gauge["est_turns_remaining"]
+                    w["gauge_total_turns"] = gauge["total_turns"]
+                    # Cross-validate: gauge (% used) + CC status bar (% remaining) ≈ 100
+                    cc_left = w.get("cc_context_pct")
+                    if cc_left is not None:
+                        expected_used = 100 - cc_left
+                        drift = abs(gauge["pct_used"] - expected_used)
+                        w["gauge_drift"] = round(drift, 1)
+
     return {"sessions": list(sessions.values())}
 
 
@@ -790,6 +1044,14 @@ html, body { height:100%; background:var(--bg); color:var(--text);
   font-size:var(--mono-size); line-height:1.6; white-space:pre-wrap;
   word-break:break-word; color:#999; }
 .pane-output.chat { display:flex; flex-direction:column; padding:10px 14px 20px; }
+.pane-gauge { position:absolute; bottom:52px; right:10px; z-index:4;
+  font-size:11px; line-height:1.4; color:var(--text2); pointer-events:none;
+  text-align:right; font-variant-numeric:tabular-nums;
+  background:rgba(25,26,27,0.85); padding:3px 7px; border-radius:6px; }
+.pane-gauge .pg-pct { font-weight:600; color:var(--text); }
+.pane-gauge .pg-pct.low { color:var(--orange); }
+.pane-gauge .pg-pct.critical { color:var(--red); }
+.pane-gauge .pg-detail { color:var(--text3); font-size:10px; }
 
 /* Pane input */
 .pane-input { display:none; padding:8px 10px; background:var(--bg2);
@@ -2565,12 +2827,14 @@ function updateSidebarStatus(session, windowIndex, ccStatus, contextPct, permMod
   if (dot) { dot.className = 'sb-win-dot ' + (ccStatus || 'idle'); }
   if (lbl) {
     lbl.className = 'sb-win-status ' + (ccStatus || 'idle');
-    let html = '';
+    // Only update context % from status bar if we have it — don't wipe gauge data
     if (contextPct != null) {
+      let ctx = lbl.querySelector('.sb-ctx');
+      if (!ctx) { ctx = document.createElement('span'); lbl.prepend(ctx); }
       const cls = contextPct <= 10 ? 'critical' : contextPct <= 25 ? 'low' : '';
-      html = '<span class="sb-ctx ' + cls + '">' + contextPct + '%</span>';
+      ctx.className = 'sb-ctx' + (cls ? ' ' + cls : '');
+      ctx.textContent = contextPct + '%';
     }
-    lbl.innerHTML = html;
   }
   // Update perm mode label
   const permEl = document.querySelector('.sb-perm[data-wid="' + wid + '"]');
@@ -2851,6 +3115,7 @@ function createPane(parentEl) {
     + '<button class="pill" onclick="sendResumeActive()">Resume</button>'
     + '</div>'
     + '</div>'
+    + '<div class="pane-gauge" data-pane-gauge="' + id + '"></div>'
     + '<div class="drop-indicator"></div>';
   (parentEl || panesContainer).appendChild(el);
   // Pane input handlers
@@ -3309,6 +3574,30 @@ function showActiveTabOutput(paneId, scrollToBottom) {
   // Ensure file-tab-active class matches active tab type
   const at = pane.activeTabId && allTabs[pane.activeTabId];
   paneEl.classList.toggle('file-tab-active', at && at.type === 'file');
+  updatePaneGauge(paneId);
+}
+
+function updatePaneGauge(paneId) {
+  const el = document.querySelector('[data-pane-gauge="' + paneId + '"]');
+  if (!el) return;
+  const pane = panes.find(p => p.id === paneId);
+  if (!pane || !pane.activeTabId) { el.innerHTML = ''; return; }
+  const tab = allTabs[pane.activeTabId];
+  if (!tab || tab.type === 'file' || !_dashboardData) { el.innerHTML = ''; return; }
+  const sess = _dashboardData.sessions.find(s => s.name === tab.session);
+  const win = sess && sess.windows.find(w => w.index === tab.windowIndex);
+  if (!win || win.gauge_context_pct == null) { el.innerHTML = ''; return; }
+  const pct = Math.round(win.gauge_context_pct);
+  const cls = pct >= 75 ? ' critical' : pct >= 50 ? ' low' : '';
+  let html = '<span class="pg-pct' + cls + '">' + pct + '%</span>';
+  if (win.gauge_est_turns != null) {
+    html += '<br><span class="pg-detail">~' + win.gauge_est_turns + ' turns</span>';
+  }
+  el.innerHTML = html;
+}
+
+function updateAllPaneGauges() {
+  for (const p of panes) updatePaneGauge(p.id);
 }
 
 // === Layout persistence ===
@@ -4447,7 +4736,11 @@ function renderSidebarSession(s, activeTab, isHidden) {
   for (const w of windows) {
     const dotClass = w.is_cc ? (w.cc_status || 'idle') : 'none';
     let status = '';
-    if (w.cc_context_pct != null) {
+    if (w.gauge_context_pct != null) {
+      const pct = Math.round(w.gauge_context_pct);
+      const cls = pct >= 75 ? 'critical' : pct >= 50 ? 'low' : '';
+      status = '<span class="sb-ctx ' + cls + '">' + pct + '%' + (w.gauge_drift > 10 ? '!' : '') + '</span>';
+    } else if (w.cc_context_pct != null) {
       const cls = w.cc_context_pct <= 10 ? 'critical' : w.cc_context_pct <= 25 ? 'low' : '';
       status = '<span class="sb-ctx ' + cls + '">' + w.cc_context_pct + '%</span>';
     }
@@ -4651,15 +4944,36 @@ function openWD(session, windowIndex) {
       const isDanger = /dangerously|skip|bypass/i.test(win.cc_perm_mode);
       html += '<div class="wd-row"><span class="wd-label">Permissions</span><span class="wd-value' + (isDanger ? '" style="color:var(--red);font-weight:600' : '') + '">' + esc(win.cc_perm_mode) + '</span></div>';
     }
-    const pct = win.cc_context_pct;
-    const ctxLabel = pct != null ? pct + '%' : 'Healthy';
-    const barColor = pct != null && pct <= 10 ? 'var(--red)' : pct != null && pct <= 25 ? 'var(--orange)' : 'var(--green)';
-    const barWidth = pct != null ? pct : 100;
-    html += '<div class="wd-row"><span class="wd-label">Context</span><span class="wd-value">'
-      + '<span style="margin-right:8px">' + ctxLabel + '</span>'
-      + '<span style="display:inline-block;width:80px;height:6px;background:var(--surface);border-radius:3px;vertical-align:middle">'
-      + '<span style="display:block;width:' + barWidth + '%;height:100%;background:' + barColor + ';border-radius:3px"></span>'
-      + '</span></span></div>';
+    if (win.gauge_context_pct != null) {
+      const gp = win.gauge_context_pct;
+      const barColor = gp >= 75 ? 'var(--red)' : gp >= 50 ? 'var(--orange)' : 'var(--green)';
+      html += '<div class="wd-row"><span class="wd-label">Context</span><span class="wd-value">'
+        + '<span style="margin-right:8px">' + Math.round(gp) + '% used</span>'
+        + '<span style="display:inline-block;width:80px;height:6px;background:var(--surface);border-radius:3px;vertical-align:middle">'
+        + '<span style="display:block;width:' + Math.round(gp) + '%;height:100%;background:' + barColor + ';border-radius:3px"></span>'
+        + '</span></span></div>';
+      if (win.gauge_burn_rate > 0) {
+        html += '<div class="wd-row"><span class="wd-label">Burn rate</span><span class="wd-value">~' + win.gauge_burn_rate.toLocaleString() + ' tok/turn</span></div>';
+      }
+      if (win.gauge_est_turns != null) {
+        html += '<div class="wd-row"><span class="wd-label">Est. turns left</span><span class="wd-value">~' + win.gauge_est_turns + '</span></div>';
+      }
+      if (win.gauge_drift != null) {
+        const driftColor = win.gauge_drift > 10 ? 'var(--red)' : 'var(--orange)';
+        html += '<div class="wd-row"><span class="wd-label">Gauge drift</span><span class="wd-value" style="color:' + driftColor + '">'
+          + win.gauge_drift + ' pts (gauge ' + Math.round(gp) + '% vs CC ' + (100 - win.cc_context_pct) + '%)</span></div>';
+      }
+    } else {
+      const pct = win.cc_context_pct;
+      const ctxLabel = pct != null ? pct + '% left' : 'Healthy';
+      const barColor = pct != null && pct <= 10 ? 'var(--red)' : pct != null && pct <= 25 ? 'var(--orange)' : 'var(--green)';
+      const barWidth = pct != null ? (100 - pct) : 0;
+      html += '<div class="wd-row"><span class="wd-label">Context</span><span class="wd-value">'
+        + '<span style="margin-right:8px">' + ctxLabel + '</span>'
+        + '<span style="display:inline-block;width:80px;height:6px;background:var(--surface);border-radius:3px;vertical-align:middle">'
+        + '<span style="display:block;width:' + barWidth + '%;height:100%;background:' + barColor + ';border-radius:3px"></span>'
+        + '</span></span></div>';
+    }
   }
   document.getElementById('wd-content').innerHTML = html;
   const isStandby = getStandby(session, windowIndex);
@@ -4751,6 +5065,7 @@ async function loadDashboard() {
         }
       }
     }
+    updateAllPaneGauges();
   } catch(e) {}
 }
 
