@@ -31,12 +31,14 @@ _notify_sent = {}      # "session:window" → epoch (dedup window)
 
 # Context gauge — JSONL-based context window utilization
 # Inline implementation (no subprocess) — reads ~/.claude/projects/*/JSONL directly.
-# Matches gauge.py logic from claude-kit but avoids the session resolver overhead.
-# Per-window matching: tmux pane → Claude PID → JSONL via sticky cache + mtime fallback.
+# Matching: front-loaded at session start. Once matched, locked for life of Claude PID.
+# Easy case: single new instance → most recent JSONL. Hard case: text matching via api_send.
 _gauge_cache = {}      # "session:window" → metrics dict
 _gauge_cache_time = 0  # epoch of last refresh
-_gauge_match = {}      # "session:window" → {"stem": jsonl_stem, "pid": claude_pid}
+_gauge_locks = {}      # "session:window" → {"stem", "pid", "path"} — permanent matches
+_gauge_sent = {}       # "session:window" → [str] — recent texts sent via api_send (for matching)
 GAUGE_CACHE_TTL = 30   # seconds
+GAUGE_MATCH_TTL = 5    # seconds — faster poll while unmatched windows exist
 GAUGE_THRESHOLD = 165_000  # empirical compression threshold (tokens)
 
 
@@ -87,18 +89,87 @@ def _gauge_compute(usage: list, threshold: int = GAUGE_THRESHOLD) -> dict:
             "compression_detected": compressed}
 
 
-def _refresh_gauge_cache():
-    """Build per-window gauge metrics by matching Claude PIDs to JSONL transcripts.
+def _gauge_jsonl_user_texts(jsonl_path):
+    """Extract user message texts from a JSONL file."""
+    texts = []
+    try:
+        with open(jsonl_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("type") != "user":
+                    continue
+                content = entry.get("message", {}).get("content", "")
+                if isinstance(content, str):
+                    texts.append(content)
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            texts.append(block.get("text", ""))
+    except Exception:
+        pass
+    return texts
 
-    Pipeline:
-    1. tmux list-panes → pane_pid per window
+
+def _gauge_score_text_match(needles, jsonl_path):
+    """Score how many needle texts appear in JSONL user messages. Higher = better match."""
+    user_texts = _gauge_jsonl_user_texts(jsonl_path)
+    score = 0
+    for needle in needles:
+        if len(needle) < 8:
+            continue  # skip very short texts — not distinctive enough
+        for ut in user_texts:
+            if needle in ut:
+                score += 1
+                break  # count each needle only once
+    return score
+
+
+def _gauge_extract_tmux_texts(session, window):
+    """Extract recent user-typed text from tmux capture for bootstrap matching.
+    Looks for lines after ❯ prompts — these are user messages in Claude Code."""
+    try:
+        r = _run(["tmux", "capture-pane", "-t", f"{session}:{window}", "-p", "-S", "-200"],
+                 capture_output=True, text=True)
+        if not r.stdout:
+            return []
+        texts = []
+        lines = r.stdout.split("\n")
+        for i, line in enumerate(lines):
+            # ❯ at start of line followed by text = user prompt
+            if line.startswith("\u276f") and len(line) > 2:
+                text = line[1:].replace("\xa0", " ").strip()
+                if len(text) >= 8:
+                    texts.append(text)
+        return texts
+    except Exception:
+        return []
+
+
+def _refresh_gauge_cache():
+    """Build per-window gauge metrics from locked JSONL matches.
+
+    Matching pipeline (front-loaded, runs until all windows locked):
+    1. tmux list-panes → shell PID per window
     2. ps process tree → find Claude child of each shell
-    3. Match Claude PID → JSONL using sticky cache (stable across refreshes)
-    4. Fallback: for new PIDs, assign by most-recent mtime among unclaimed JSONLs
+    3. Locked windows: just refresh metrics from their JSONL
+    4. Unlocked windows: attempt match:
+       - Easy: only 1 unmatched window for a slug → most recent unclaimed JSONL
+       - Hard: multiple unmatched → text-match via _gauge_sent texts
+    Once locked, a match persists until the Claude PID changes.
     """
-    global _gauge_cache, _gauge_cache_time, _gauge_match
+    global _gauge_cache, _gauge_cache_time, _gauge_locks
     now = time.time()
-    if now - _gauge_cache_time < GAUGE_CACHE_TTL:
+    # Use faster poll interval when unmatched windows might exist
+    # (we can't know for sure without running the pipeline, but _gauge_sent
+    # having entries is a strong signal that windows are waiting for text match)
+    ttl = GAUGE_MATCH_TTL if _gauge_sent else GAUGE_CACHE_TTL
+    if now - _gauge_cache_time < ttl:
         return
     _gauge_cache_time = now
 
@@ -160,7 +231,7 @@ def _refresh_gauge_cache():
                         slug_jsonls.setdefault(pdir.name, []).append(
                             (str(jf), st.st_mtime, jf.stem))
 
-        # Prune stale entries from _gauge_match (PID changed or window gone)
+        # Prune stale locks (PID changed or window gone)
         active_keys = set()
         pid_for_key = {}
         for cpid, spid in claude_pids:
@@ -170,69 +241,108 @@ def _refresh_gauge_cache():
                 key = f"{sname}:{widx}"
                 active_keys.add(key)
                 pid_for_key[key] = cpid
-        for key in list(_gauge_match.keys()):
-            if key not in active_keys or _gauge_match[key]["pid"] != pid_for_key.get(key):
-                del _gauge_match[key]
+        for key in list(_gauge_locks.keys()):
+            if key not in active_keys or _gauge_locks[key]["pid"] != pid_for_key.get(key):
+                del _gauge_locks[key]
 
-        # Step 3: Match each Claude PID → JSONL (sticky cache first, then mtime fallback)
-        claimed_stems = {m["stem"] for m in _gauge_match.values()}
+        claimed_stems = {m["stem"] for m in _gauge_locks.values()}
 
-        # First pass: use sticky cache hits
+        # Pass 1: Refresh metrics for locked windows (no re-matching)
         for cpid, spid in claude_pids:
             pane_info = pane_by_pid.get(spid)
             if not pane_info:
                 continue
             sname, widx, cwd = pane_info
             key = f"{sname}:{widx}"
-            if key not in _gauge_match:
+            if key not in _gauge_locks:
                 continue
-            stem = _gauge_match[key]["stem"]
-            slug = cwd.replace("/", "-")
-            jsonls = slug_jsonls.get(slug, [])
-            matched_path = None
-            for path, mt, s in jsonls:
-                if s == stem:
-                    matched_path = path
-                    break
-            if matched_path:
-                usage = _gauge_extract_usage(matched_path)
+            path = _gauge_locks[key]["path"]
+            try:
+                usage = _gauge_extract_usage(path)
                 metrics = _gauge_compute(usage)
                 if metrics:
-                    metrics["session_id"] = stem
-                    metrics["matched"] = "cached"
+                    metrics["session_id"] = _gauge_locks[key]["stem"]
+                    metrics["matched"] = "locked"
                     cache[key] = metrics
+            except FileNotFoundError:
+                del _gauge_locks[key]  # JSONL deleted, unlock
 
-        # Second pass: assign unmatched windows by mtime (most recent unclaimed JSONL)
+        # Pass 2: Match unlocked windows
+        # Group unmatched by slug to detect easy vs hard case
+        unmatched = []  # [(key, cpid, slug, cwd)]
         for cpid, spid in claude_pids:
             pane_info = pane_by_pid.get(spid)
             if not pane_info:
                 continue
             sname, widx, cwd = pane_info
             key = f"{sname}:{widx}"
-            if key in cache:
+            if key in _gauge_locks:
                 continue
             slug = cwd.replace("/", "-")
-            jsonls = slug_jsonls.get(slug, [])
-            if not jsonls:
-                continue
+            unmatched.append((key, cpid, slug, cwd))
 
-            # Filter out already-claimed stems
-            available = [(p, mt, s) for p, mt, s in jsonls if s not in claimed_stems]
-            if not available:
-                continue
+        if unmatched:
+            # Group by slug
+            by_slug = {}
+            for key, cpid, slug, cwd in unmatched:
+                by_slug.setdefault(slug, []).append((key, cpid))
 
-            # Pick the most recently modified JSONL
-            available.sort(key=lambda x: x[1], reverse=True)
-            path, mt, stem = available[0]
-            usage = _gauge_extract_usage(path)
-            metrics = _gauge_compute(usage)
-            if metrics:
-                metrics["session_id"] = stem
-                metrics["matched"] = "mtime"
-                cache[key] = metrics
-                # Lock this match — it persists until the PID changes
-                _gauge_match[key] = {"stem": stem, "pid": cpid}
-                claimed_stems.add(stem)
+            for slug, windows in by_slug.items():
+                jsonls = slug_jsonls.get(slug, [])
+                if not jsonls:
+                    continue
+                available = [(p, mt, s) for p, mt, s in jsonls if s not in claimed_stems]
+                if not available:
+                    continue
+                available.sort(key=lambda x: x[1], reverse=True)
+
+                if len(windows) == 1:
+                    # Easy case: single unmatched window → most recent unclaimed JSONL
+                    key, cpid = windows[0]
+                    path, mt, stem = available[0]
+                    _gauge_locks[key] = {"stem": stem, "pid": cpid, "path": path}
+                    claimed_stems.add(stem)
+                    usage = _gauge_extract_usage(path)
+                    metrics = _gauge_compute(usage)
+                    if metrics:
+                        metrics["session_id"] = stem
+                        metrics["matched"] = "mtime"
+                        cache[key] = metrics
+                else:
+                    # Hard case: multiple unmatched windows for same slug
+                    # Use sent texts (from api_send) or tmux capture (bootstrap)
+                    for key, cpid in windows:
+                        sent = _gauge_sent.get(key, [])
+                        if not sent:
+                            # Bootstrap: extract user texts from tmux screen
+                            sn, wi = key.split(":", 1)
+                            sent = _gauge_extract_tmux_texts(sn, int(wi))
+                        if not sent:
+                            continue  # no text available — stay unmatched (AC-5)
+                        # Score each candidate by text matches — lock if one is clearly best
+                        candidates_still = [(p, mt, s) for p, mt, s in available
+                                            if s not in claimed_stems]
+                        scored = []
+                        for path, mt, stem in candidates_still:
+                            score = _gauge_score_text_match(sent, path)
+                            if score > 0:
+                                scored.append((score, path, mt, stem))
+                        if scored:
+                            scored.sort(key=lambda x: x[0], reverse=True)
+                            best_score = scored[0][0]
+                            # Lock if best score is unique (no tie)
+                            if len(scored) == 1 or scored[1][0] < best_score:
+                                _, path, mt, stem = scored[0]
+                                _gauge_locks[key] = {"stem": stem, "pid": cpid,
+                                                     "path": path}
+                                claimed_stems.add(stem)
+                                _gauge_sent.pop(key, None)
+                                usage = _gauge_extract_usage(path)
+                                metrics = _gauge_compute(usage)
+                                if metrics:
+                                    metrics["session_id"] = stem
+                                    metrics["matched"] = "text"
+                                    cache[key] = metrics
 
         _gauge_cache = cache
     except Exception:
@@ -5323,6 +5433,12 @@ async def api_send(body: dict):
         key = f"{s}:{w}"
         _last_interaction[key] = time.time()
         _notify_pending[key] = {"window_name": window_name, "saw_busy": False}
+        # Collect sent text for gauge matching (only while unmatched)
+        if key not in _gauge_locks:
+            texts = _gauge_sent.setdefault(key, [])
+            texts.append(cmd)
+            if len(texts) > 20:
+                texts[:] = texts[-20:]
     return JSONResponse({"ok": True})
 
 
