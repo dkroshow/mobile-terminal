@@ -40,6 +40,31 @@ _gauge_sent = {}       # "session:window" → [str] — recent texts sent via ap
 GAUGE_CACHE_TTL = 30   # seconds
 GAUGE_MATCH_TTL = 5    # seconds — faster poll while unmatched windows exist
 GAUGE_THRESHOLD = 165_000  # empirical compression threshold (tokens)
+_GAUGE_LOCKS_FILE = Path.home() / ".mobile-terminal-gauge-locks.json"
+
+
+def _gauge_save_locks():
+    """Persist gauge locks to disk (atomic write)."""
+    try:
+        tmp = str(_GAUGE_LOCKS_FILE) + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(_gauge_locks, f)
+        os.replace(tmp, _GAUGE_LOCKS_FILE)
+    except Exception:
+        pass
+
+
+def _gauge_load_locks():
+    """Load gauge locks from disk on startup."""
+    global _gauge_locks
+    try:
+        with open(_GAUGE_LOCKS_FILE) as f:
+            _gauge_locks = json.load(f)
+    except Exception:
+        _gauge_locks = {}
+
+
+_gauge_load_locks()
 
 
 def _gauge_extract_usage(jsonl_path: str) -> list:
@@ -89,8 +114,8 @@ def _gauge_compute(usage: list, threshold: int = GAUGE_THRESHOLD) -> dict:
             "compression_detected": compressed}
 
 
-def _gauge_jsonl_user_texts(jsonl_path):
-    """Extract user message texts from a JSONL file."""
+def _gauge_jsonl_texts(jsonl_path):
+    """Extract user and assistant message texts from a JSONL file for matching."""
     texts = []
     try:
         with open(jsonl_path) as f:
@@ -102,7 +127,7 @@ def _gauge_jsonl_user_texts(jsonl_path):
                     entry = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if entry.get("type") != "user":
+                if entry.get("type") not in ("user", "assistant"):
                     continue
                 content = entry.get("message", {}).get("content", "")
                 if isinstance(content, str):
@@ -117,35 +142,67 @@ def _gauge_jsonl_user_texts(jsonl_path):
 
 
 def _gauge_score_text_match(needles, jsonl_path):
-    """Score how many needle texts appear in JSONL user messages. Higher = better match."""
-    user_texts = _gauge_jsonl_user_texts(jsonl_path)
+    """Score how many needle texts appear in JSONL messages. Higher = better match."""
+    jsonl_texts = _gauge_jsonl_texts(jsonl_path)
     score = 0
     for needle in needles:
         if len(needle) < 8:
             continue  # skip very short texts — not distinctive enough
-        for ut in user_texts:
-            if needle in ut:
+        for jt in jsonl_texts:
+            if needle in jt:
                 score += 1
                 break  # count each needle only once
     return score
 
 
 def _gauge_extract_tmux_texts(session, window):
-    """Extract recent user-typed text from tmux capture for bootstrap matching.
-    Looks for lines after ❯ prompts — these are user messages in Claude Code."""
+    """Extract distinctive text from tmux capture for bootstrap matching.
+    Grabs user prompts, assistant content, and concatenates nearby lines
+    into longer chunks for more distinctive matching."""
     try:
         r = _run(["tmux", "capture-pane", "-t", f"{session}:{window}", "-p", "-S", "-200"],
                  capture_output=True, text=True)
         if not r.stdout:
             return []
+        # Clean lines
+        cleaned = []
+        for line in r.stdout.split("\n"):
+            text = line.replace("\xa0", " ").strip()
+            if not text:
+                cleaned.append("")
+                continue
+            # Skip box-drawing / divider lines
+            if all(c in "\u2500\u2501\u2550\u2502\u2503\u250c\u2510\u2514\u2518\u251c\u2524\u252c\u2534\u253c\u256d\u256e\u2570\u256f\u2571\u2572 \u25aa" for c in text):
+                cleaned.append("")
+                continue
+            # Skip CC status bar
+            if text.startswith("\u23f5"):
+                cleaned.append("")
+                continue
+            # Strip leading ❯ or ⏺
+            for prefix in ("\u276f", "\u23fa"):
+                if text.startswith(prefix):
+                    text = text[len(prefix):].strip()
+                    break
+            cleaned.append(text)
+        # Build chunks: join consecutive non-empty lines into paragraphs
         texts = []
-        lines = r.stdout.split("\n")
-        for i, line in enumerate(lines):
-            # ❯ at start of line followed by text = user prompt
-            if line.startswith("\u276f") and len(line) > 2:
-                text = line[1:].replace("\xa0", " ").strip()
-                if len(text) >= 8:
-                    texts.append(text)
+        seen = set()
+        chunk = []
+        for line in cleaned:
+            if line:
+                chunk.append(line)
+            else:
+                if chunk:
+                    joined = " ".join(chunk)
+                    if len(joined) >= 20 and joined not in seen:
+                        seen.add(joined)
+                        texts.append(joined)
+                    chunk = []
+        if chunk:
+            joined = " ".join(chunk)
+            if len(joined) >= 20 and joined not in seen:
+                texts.append(joined)
         return texts
     except Exception:
         return []
@@ -219,7 +276,7 @@ def _refresh_gauge_cache():
 
         # Build slug → active JSONLs map
         projects_dir = Path.home() / ".claude" / "projects"
-        cutoff = now - 86400
+        cutoff = now - 7 * 86400  # 7 days — generous window for matching stale sessions
         slug_jsonls = {}   # slug → [(path, mtime, stem)]
         if projects_dir.is_dir():
             for pdir in projects_dir.iterdir():
@@ -345,6 +402,7 @@ def _refresh_gauge_cache():
                                     cache[key] = metrics
 
         _gauge_cache = cache
+        _gauge_save_locks()
     except Exception:
         pass  # Keep stale cache on error
 
