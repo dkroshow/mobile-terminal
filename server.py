@@ -32,9 +32,10 @@ _notify_sent = {}      # "session:window" → epoch (dedup window)
 # Context gauge — JSONL-based context window utilization
 # Inline implementation (no subprocess) — reads ~/.claude/projects/*/JSONL directly.
 # Matches gauge.py logic from claude-kit but avoids the session resolver overhead.
-# Per-window matching via TTY: tmux pane_tty → Claude PID (via lsof fd0) → tasks UUID → JSONL.
+# Per-window matching: tmux pane → Claude PID → JSONL via sticky cache + mtime fallback.
 _gauge_cache = {}      # "session:window" → metrics dict
 _gauge_cache_time = 0  # epoch of last refresh
+_gauge_match = {}      # "session:window" → {"stem": jsonl_stem, "pid": claude_pid}
 GAUGE_CACHE_TTL = 30   # seconds
 GAUGE_THRESHOLD = 165_000  # empirical compression threshold (tokens)
 
@@ -90,13 +91,12 @@ def _refresh_gauge_cache():
     """Build per-window gauge metrics by matching Claude PIDs to JSONL transcripts.
 
     Pipeline:
-    1. tmux list-panes → pane_tty + pane_pid per window
+    1. tmux list-panes → pane_pid per window
     2. ps process tree → find Claude child of each shell
-    3. lsof fd0 → Claude PID → TTY (to match back to pane)
-    4. lsof tasks → Claude PID → UUID → JSONL path
-    5. Fallback: for unmatched PIDs, correlate JSONL mtime with process age
+    3. Match Claude PID → JSONL using sticky cache (stable across refreshes)
+    4. Fallback: for new PIDs, assign by most-recent mtime among unclaimed JSONLs
     """
-    global _gauge_cache, _gauge_cache_time
+    global _gauge_cache, _gauge_cache_time, _gauge_match
     now = time.time()
     if now - _gauge_cache_time < GAUGE_CACHE_TTL:
         return
@@ -105,25 +105,22 @@ def _refresh_gauge_cache():
     try:
         cache = {}
 
-        # Step 1: Get tmux panes with TTY and activity timestamp
+        # Step 1: Get tmux panes with pane_pid and cwd
         r = _run(["tmux", "list-panes", "-a", "-F",
-                   "#{session_name}\t#{window_index}\t#{pane_tty}\t#{pane_pid}\t#{pane_current_path}\t#{window_activity}"],
+                   "#{session_name}\t#{window_index}\t#{pane_pid}\t#{pane_current_path}"],
                   capture_output=True, text=True)
         if not r.stdout.strip():
             return
-        pane_by_tty = {}   # tty → (session, window, shell_pid, cwd)
-        pane_by_pid = {}   # shell_pid → (session, window, tty, cwd, activity)
+        pane_by_pid = {}   # shell_pid → (session, window, cwd)
         for line in r.stdout.strip().split("\n"):
             parts = line.split("\t")
-            if len(parts) < 6:
+            if len(parts) < 4:
                 continue
-            sname, widx, tty, spid, cwd, wact = parts
+            sname, widx, spid, cwd = parts
             try:
-                activity = int(wact)
+                pane_by_pid[int(spid)] = (sname, int(widx), cwd)
             except ValueError:
-                activity = 0
-            pane_by_tty[tty] = (sname, int(widx), int(spid), cwd)
-            pane_by_pid[int(spid)] = (sname, int(widx), tty, cwd, activity)
+                pass
 
         # Step 2: Build process tree, find Claude children
         r2 = _run(["ps", "-eo", "pid,ppid,comm"], capture_output=True, text=True)
@@ -149,34 +146,10 @@ def _refresh_gauge_cache():
             _gauge_cache = cache
             return
 
-        # Step 3+4: Single lsof call — get TTY (fd0) and tasks UUID for all Claude PIDs
-        pid_str = ",".join(str(cp) for cp, _ in claude_pids)
-        r3 = subprocess.run(["lsof", "-p", pid_str], capture_output=True, text=True, timeout=5)
-        pid_to_tty = {}    # claude_pid → tty
-        pid_to_uuid = {}   # claude_pid → session UUID
-        for line in (r3.stdout or "").split("\n"):
-            parts = line.split()
-            if len(parts) < 9:
-                continue
-            try:
-                pid = int(parts[1])
-            except ValueError:
-                continue
-            fname = parts[-1]
-            if parts[3] == "0u" and fname.startswith("/dev/tty"):
-                pid_to_tty[pid] = fname
-            elif "/.claude/tasks/" in fname:
-                # Extract UUID from path like /Users/kd/.claude/tasks/<uuid>
-                m = re.search(r'/\.claude/tasks/([0-9a-f-]{36})', fname)
-                if m:
-                    pid_to_uuid[pid] = m.group(1)
-
-        # Step 5: Match Claude PID → pane → JSONL
+        # Build slug → active JSONLs map
         projects_dir = Path.home() / ".claude" / "projects"
         cutoff = now - 86400
-
-        # Build slug → active JSONLs map (with birthtime for matching)
-        slug_jsonls = {}   # slug → [(path, mtime, stem, birthtime)]
+        slug_jsonls = {}   # slug → [(path, mtime, stem)]
         if projects_dir.is_dir():
             for pdir in projects_dir.iterdir():
                 if not pdir.is_dir():
@@ -184,81 +157,82 @@ def _refresh_gauge_cache():
                 for jf in pdir.glob("*.jsonl"):
                     st = jf.stat()
                     if st.st_mtime >= cutoff:
-                        bt = getattr(st, 'st_birthtime', st.st_mtime)
                         slug_jsonls.setdefault(pdir.name, []).append(
-                            (str(jf), st.st_mtime, jf.stem, bt))
+                            (str(jf), st.st_mtime, jf.stem))
 
-        # For each Claude PID, find its pane and JSONL
+        # Prune stale entries from _gauge_match (PID changed or window gone)
+        active_keys = set()
+        pid_for_key = {}
+        for cpid, spid in claude_pids:
+            pane_info = pane_by_pid.get(spid)
+            if pane_info:
+                sname, widx, cwd = pane_info
+                key = f"{sname}:{widx}"
+                active_keys.add(key)
+                pid_for_key[key] = cpid
+        for key in list(_gauge_match.keys()):
+            if key not in active_keys or _gauge_match[key]["pid"] != pid_for_key.get(key):
+                del _gauge_match[key]
+
+        # Step 3: Match each Claude PID → JSONL (sticky cache first, then mtime fallback)
+        claimed_stems = {m["stem"] for m in _gauge_match.values()}
+
+        # First pass: use sticky cache hits
         for cpid, spid in claude_pids:
             pane_info = pane_by_pid.get(spid)
             if not pane_info:
                 continue
-            sname, widx, tty, cwd, _act = pane_info
+            sname, widx, cwd = pane_info
             key = f"{sname}:{widx}"
+            if key not in _gauge_match:
+                continue
+            stem = _gauge_match[key]["stem"]
+            slug = cwd.replace("/", "-")
+            jsonls = slug_jsonls.get(slug, [])
+            matched_path = None
+            for path, mt, s in jsonls:
+                if s == stem:
+                    matched_path = path
+                    break
+            if matched_path:
+                usage = _gauge_extract_usage(matched_path)
+                metrics = _gauge_compute(usage)
+                if metrics:
+                    metrics["session_id"] = stem
+                    metrics["matched"] = "cached"
+                    cache[key] = metrics
+
+        # Second pass: assign unmatched windows by mtime (most recent unclaimed JSONL)
+        for cpid, spid in claude_pids:
+            pane_info = pane_by_pid.get(spid)
+            if not pane_info:
+                continue
+            sname, widx, cwd = pane_info
+            key = f"{sname}:{widx}"
+            if key in cache:
+                continue
             slug = cwd.replace("/", "-")
             jsonls = slug_jsonls.get(slug, [])
             if not jsonls:
                 continue
 
-            # Try tasks UUID match first
-            uuid = pid_to_uuid.get(cpid)
-            matched_path = None
-            if uuid:
-                for path, mt, stem, bt in jsonls:
-                    if stem == uuid:
-                        matched_path = path
-                        break
-
-            # Fallback: if only one active JSONL, use it
-            if not matched_path and len(jsonls) == 1:
-                matched_path = jsonls[0][0]
-
-            if matched_path:
-                usage = _gauge_extract_usage(matched_path)
-                metrics = _gauge_compute(usage)
-                if metrics:
-                    metrics["session_id"] = Path(matched_path).stem
-                    metrics["matched"] = "uuid" if uuid else "single"
-                    cache[key] = metrics
-
-        # Second pass: for unmatched panes, match by JSONL mtime ↔ window activity
-        # Within a project, sort unmatched windows by tmux activity and
-        # unmatched JSONLs by mtime, then pair them up (most active → most recent)
-        unmatched_by_slug = {}  # slug → [(key, activity)]
-        for cpid, spid in claude_pids:
-            pane_info = pane_by_pid.get(spid)
-            if not pane_info:
-                continue
-            sname, widx, tty, cwd, activity = pane_info
-            key = f"{sname}:{widx}"
-            if key in cache:
-                continue
-            slug = cwd.replace("/", "-")
-            # Prefer _last_interaction (user-initiated) over tmux activity (noisy for CC)
-            act = _last_interaction.get(key, activity)
-            unmatched_by_slug.setdefault(slug, []).append((key, act))
-
-        for slug, pane_list in unmatched_by_slug.items():
-            jsonls = slug_jsonls.get(slug, [])
-            matched_uuids = {cache[k]["session_id"] for k in cache
-                             if cache[k].get("session_id")}
-            available = [(p, mt, stem, bt) for p, mt, stem, bt in jsonls
-                         if stem not in matched_uuids]
+            # Filter out already-claimed stems
+            available = [(p, mt, s) for p, mt, s in jsonls if s not in claimed_stems]
             if not available:
                 continue
-            # Sort both by recency, pair up
-            available.sort(key=lambda x: x[1], reverse=True)  # by mtime
-            pane_list.sort(key=lambda x: x[1], reverse=True)  # by activity
-            for i, (key, act) in enumerate(pane_list):
-                if i >= len(available):
-                    break
-                path = available[i][0]
-                usage = _gauge_extract_usage(path)
-                metrics = _gauge_compute(usage)
-                if metrics:
-                    metrics["session_id"] = available[i][2]
-                    metrics["matched"] = "activity"
-                    cache[key] = metrics
+
+            # Pick the most recently modified JSONL
+            available.sort(key=lambda x: x[1], reverse=True)
+            path, mt, stem = available[0]
+            usage = _gauge_extract_usage(path)
+            metrics = _gauge_compute(usage)
+            if metrics:
+                metrics["session_id"] = stem
+                metrics["matched"] = "mtime"
+                cache[key] = metrics
+                # Lock this match — it persists until the PID changes
+                _gauge_match[key] = {"stem": stem, "pid": cpid}
+                claimed_stems.add(stem)
 
         _gauge_cache = cache
     except Exception:

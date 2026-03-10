@@ -1,6 +1,7 @@
 # Current Work
 
 ## Recently Completed
+- **2026-03-09**: Gauge stability fix — replaced unstable activity-based JSONL matching with sticky match cache (`_gauge_match`). lsof UUID matching was broken (Claude doesn't keep tasks files open), causing all matches to fall through to heuristic pairing that flip-flopped every 30s. Now matches are locked per PID.
 - **2026-03-09**: Context gauge UX — moved gauge from floating overlay to inside input bar (above send button); fixed % semantics (all "remaining" now, matching Claude's model); unified color coding via `_ctxCls()` (>25%=default, ≤25%=orange, ≤10%=red); added global bar gauge for single-pane mode
 - **2026-03-08**: Context gauge integration — inlined JSONL-based context window utilization into server.py (avoids subprocess to gauge.py which hung due to session resolver). Per-window matching via TTY→Claude PID→tasks UUID→JSONL. Sidebar shows per-window context %, pane overlay shows "N% / ~M turns", details modal shows burn rate + est turns. Cross-validation (gauge drift) when both gauge and CC status bar data available. CLAUDE.md updated with cross-project role section.
 - **2026-03-07**: Fix Raw view word-wrap rejoining (3 issues), file tab tooltip, mobile add-pane button
@@ -13,24 +14,17 @@ None
 
 ## Session Notes
 
-### Session 2026-03-09 (gauge UX + % consistency)
-- `gauge_context_pct` was "% used" (0=fresh, 100=full) but `cc_context_pct` was "% remaining" (100=fresh, 0=full) — inverted at server level (`100 - pct_used`) so both are "remaining"
-- Color coding was inconsistent: gauge path used ≥75/≥50 thresholds (treating value as "used"), CC path used ≤10/≤25 (treating as "remaining"). Unified via `_ctxCls(pct)` helper
-- Gauge moved from `.pane-gauge` absolute overlay to inside `.pane-input` div (before input-row). Also added `#global-gauge` to `#bar` for single-pane mode
-- Details modal bar now fills to show remaining (was filling to show used), labels say "X% left"
-
-### Session 2026-03-08 (gauge integration)
-- Gauge data inlined (~200 lines) rather than subprocess to `gauge.py` — session resolver's `lsof -p` per process hangs with many panes
-- Per-window JSONL matching: TTY matching (tmux pane_tty ↔ Claude PID fd0) + tasks UUID (lsof) for exact match; activity-time correlation as fallback
-- Birthtime matching attempted but abandoned — Claude processes are long-lived and create new JSONLs on `/clear`, so process start time doesn't match JSONL birthtime
-- Activity-based fallback sorts unmatched windows by tmux activity and unmatched JSONLs by mtime, then pairs them up — best-effort, may misassign in multi-window same-project setups
-- `updateSidebarStatus` fixed to not wipe gauge context % on 1s poll (targeted DOM update instead of innerHTML)
-- Gauge cache refreshes every 30s via `_refresh_gauge_cache()`, keyed by `session:window`
-- Cross-validation: `gauge_drift` = |gauge_pct_used - (100 - cc_remaining)|, shown as "!" in sidebar and detailed in modal
+### Session 2026-03-09 (gauge stability fix)
+- lsof UUID matching was completely broken — Claude never keeps `~/.claude/tasks/` files open, so lsof never finds them
+- ALL matching fell through to activity-based heuristic which re-paired windows and JSONLs every 30s by sorting both by recency
+- With 12 active JSONLs for galaxy project, the pairing flip-flopped constantly — windows got matched to different conversations' metrics each refresh
+- Fix: `_gauge_match` sticky cache maps `"session:window"` → `{stem, pid}`. Match persists until Claude PID changes (process restart = new session)
+- Removed lsof step entirely, simplified to two-pass: cached matches first, then mtime-based assignment for new (unclaimed) windows
+- Verified: numbers now hold steady across cache refreshes (only active conversations show natural drift from new tokens)
 
 ## Up Next
 - Consider adding basic authentication (API key or simple auth)
 - Chat mode could show tool call summaries (collapsed details) instead of hiding them entirely
 - Consider WebSocket for lower-latency updates (currently 1s polling)
 - Dashboard performance: `get_dashboard()` runs N capture-pane calls (one per window) — could be slow with many windows
-- Gauge accuracy: activity-based fallback matching may misassign JSONLs for multi-window same-project setups
+- Gauge matching: initial assignment for multi-window same-project setups may still pick wrong JSONL on first match (most-recent mtime heuristic), but at least stays consistent once assigned
