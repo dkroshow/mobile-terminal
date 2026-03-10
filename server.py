@@ -40,7 +40,7 @@ _gauge_locks = {}      # "session:window" → {"stem", "pid", "path"} — perman
 _gauge_sent = {}       # "session:window" → [str] — recent texts sent via api_send (for matching)
 GAUGE_CACHE_TTL = 30   # seconds
 GAUGE_MATCH_TTL = 5    # seconds — faster poll while unmatched windows exist
-GAUGE_THRESHOLD = 165_000  # empirical compression threshold (tokens)
+GAUGE_THRESHOLD = 170_000  # just above empirical auto-compact ceiling (~168k max observed)
 _GAUGE_LOCKS_FILE = Path.home() / ".mobile-terminal-gauge-locks.json"
 
 
@@ -669,6 +669,11 @@ def get_dashboard() -> dict:
             for w in s["windows"]:
                 key = f"{s['name']}:{w['index']}"
                 gauge = _gauge_cache.get(key)
+                if w.get("cc_fresh") and key in _gauge_locks:
+                    del _gauge_locks[key]
+                    _gauge_save_locks()
+                    _gauge_cache.pop(key, None)
+                    continue
                 if gauge:
                     w["gauge_context_pct"] = round(100 - gauge["pct_used"], 1)  # remaining %
                     w["gauge_burn_rate"] = gauge["burn_rate"]
