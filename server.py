@@ -341,20 +341,8 @@ def _refresh_gauge_cache():
             if key not in _gauge_locks:
                 continue
             path = _gauge_locks[key]["path"]
-            try:
-                locked_mtime = os.path.getmtime(path)
-            except FileNotFoundError:
+            if not os.path.exists(path):
                 del _gauge_locks[key]
-                continue
-            # Check if a newer JSONL exists in the same slug dir (session restarted, same PID)
-            lock_slug = str(Path(path).parent.name)
-            newer_exists = False
-            for jpath, jmt, jstem in slug_jsonls.get(lock_slug, []):
-                if jstem != _gauge_locks[key]["stem"] and jmt > locked_mtime + 60:
-                    newer_exists = True
-                    break
-            if newer_exists:
-                del _gauge_locks[key]  # Unlock — let Pass 2 re-match to newer JSONL
                 continue
             try:
                 _gauge_cache_metrics(cache, key, path, _gauge_locks[key]["stem"], "locked")
