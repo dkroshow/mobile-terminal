@@ -87,3 +87,5 @@ Key APIs consumed externally:
 - No JS frameworks — keep it vanilla or minimal
 - Must work well on iPhone (primary use case)
 - Service is running in production — be careful with changes
+- **CRITICAL: After editing `server.py`, you MUST restart the server** — `launchctl unload ~/Library/LaunchAgents/com.kd.mobile-terminal.plist && launchctl load ~/Library/LaunchAgents/com.kd.mobile-terminal.plist`. The server runs from memory; edits on disk have zero effect until restart. This has caused multi-hour debugging sessions twice (stale code looks like "my fix didn't work" or "server is still slow"). Verify with `curl -s -o /dev/null -w "%{time_total}s" http://localhost:7681/` (should be <50ms)
+- **All async endpoint handlers MUST use `run_in_executor` for subprocess/file I/O** — sync calls block the event loop and cause 95%+ CPU. The gauge system reads 25+ MB of JSONL; dashboard does N capture-pane calls. Without executor offloading, every poll blocks every other request

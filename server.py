@@ -9,6 +9,7 @@ import sys
 import time
 import asyncio
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -67,9 +68,13 @@ def _gauge_load_locks():
 _gauge_load_locks()
 
 
-def _gauge_extract_usage(jsonl_path: str) -> list:
-    """Parse JSONL transcript, return per-turn usage [{total_input, output, timestamp}]."""
+def _gauge_extract_usage(jsonl_path: str) -> tuple:
+    """Parse JSONL transcript, return (usage_list, last_message_ts_epoch).
+    usage_list: [{total_input, output, timestamp}] from assistant turns.
+    last_message_ts_epoch: epoch seconds of last user/assistant message (for activity age).
+    """
     usage = []
+    last_ts_str = None
     with open(jsonl_path) as f:
         for line in f:
             line = line.strip()
@@ -79,7 +84,11 @@ def _gauge_extract_usage(jsonl_path: str) -> list:
                 entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if entry.get("type") != "assistant":
+            etype = entry.get("type")
+            ts = entry.get("timestamp")
+            if etype in ("user", "assistant") and ts:
+                last_ts_str = ts
+            if etype != "assistant":
                 continue
             u = entry.get("message", {}).get("usage", {})
             if not u:
@@ -90,11 +99,19 @@ def _gauge_extract_usage(jsonl_path: str) -> list:
             if total == 0:
                 continue
             usage.append({"total_input": total, "output": u.get("output_tokens", 0) or 0,
-                          "timestamp": entry.get("timestamp")})
-    return usage
+                          "timestamp": ts})
+    # Convert last ISO timestamp to epoch
+    last_epoch = None
+    if last_ts_str:
+        try:
+            dt = datetime.fromisoformat(last_ts_str.replace("Z", "+00:00"))
+            last_epoch = int(dt.timestamp())
+        except Exception:
+            pass
+    return usage, last_epoch
 
 
-def _gauge_compute(usage: list, threshold: int = GAUGE_THRESHOLD) -> dict:
+def _gauge_compute(usage: list, last_ts: int = None, threshold: int = GAUGE_THRESHOLD) -> dict:
     """Compute context gauge metrics from usage data."""
     if not usage:
         return None
@@ -111,7 +128,7 @@ def _gauge_compute(usage: list, threshold: int = GAUGE_THRESHOLD) -> dict:
     return {"current_size": current, "threshold": threshold, "remaining": remaining,
             "pct_used": round(pct, 1), "burn_rate": round(burn),
             "est_turns_remaining": est, "total_turns": len(usage),
-            "compression_detected": compressed}
+            "compression_detected": compressed, "last_ts": last_ts}
 
 
 def _gauge_jsonl_texts(jsonl_path):
@@ -206,6 +223,16 @@ def _gauge_extract_tmux_texts(session, window):
         return texts
     except Exception:
         return []
+
+
+def _gauge_cache_metrics(cache, key, path, session_id, matched_type):
+    """Extract usage from JSONL and compute gauge metrics into cache."""
+    usage, last_ts = _gauge_extract_usage(path)
+    metrics = _gauge_compute(usage, last_ts=last_ts)
+    if metrics:
+        metrics["session_id"] = session_id
+        metrics["matched"] = matched_type
+        cache[key] = metrics
 
 
 def _refresh_gauge_cache():
@@ -315,12 +342,22 @@ def _refresh_gauge_cache():
                 continue
             path = _gauge_locks[key]["path"]
             try:
-                usage = _gauge_extract_usage(path)
-                metrics = _gauge_compute(usage)
-                if metrics:
-                    metrics["session_id"] = _gauge_locks[key]["stem"]
-                    metrics["matched"] = "locked"
-                    cache[key] = metrics
+                locked_mtime = os.path.getmtime(path)
+            except FileNotFoundError:
+                del _gauge_locks[key]
+                continue
+            # Check if a newer JSONL exists in the same slug dir (session restarted, same PID)
+            lock_slug = str(Path(path).parent.name)
+            newer_exists = False
+            for jpath, jmt, jstem in slug_jsonls.get(lock_slug, []):
+                if jstem != _gauge_locks[key]["stem"] and jmt > locked_mtime + 60:
+                    newer_exists = True
+                    break
+            if newer_exists:
+                del _gauge_locks[key]  # Unlock — let Pass 2 re-match to newer JSONL
+                continue
+            try:
+                _gauge_cache_metrics(cache, key, path, _gauge_locks[key]["stem"], "locked")
             except FileNotFoundError:
                 del _gauge_locks[key]  # JSONL deleted, unlock
 
@@ -359,12 +396,7 @@ def _refresh_gauge_cache():
                     path, mt, stem = available[0]
                     _gauge_locks[key] = {"stem": stem, "pid": cpid, "path": path}
                     claimed_stems.add(stem)
-                    usage = _gauge_extract_usage(path)
-                    metrics = _gauge_compute(usage)
-                    if metrics:
-                        metrics["session_id"] = stem
-                        metrics["matched"] = "mtime"
-                        cache[key] = metrics
+                    _gauge_cache_metrics(cache, key, path, stem, "mtime")
                 else:
                     # Hard case: multiple unmatched windows for same slug
                     # Use sent texts (from api_send) or tmux capture (bootstrap)
@@ -394,12 +426,7 @@ def _refresh_gauge_cache():
                                                      "path": path}
                                 claimed_stems.add(stem)
                                 _gauge_sent.pop(key, None)
-                                usage = _gauge_extract_usage(path)
-                                metrics = _gauge_compute(usage)
-                                if metrics:
-                                    metrics["session_id"] = stem
-                                    metrics["matched"] = "text"
-                                    cache[key] = metrics
+                                _gauge_cache_metrics(cache, key, path, stem, "text")
 
         _gauge_cache = cache
         _gauge_save_locks()
@@ -544,13 +571,13 @@ def get_pane_preview(session: str, window: int, lines: int = 5) -> str:
     return clean_terminal_text(r.stdout).strip()
 
 
-def detect_cc_status(text: str, activity_age: float = None) -> dict:
+def detect_cc_status(text: str) -> dict:
     """Detect if text is Claude Code output and its status.
     Returns dict with is_cc, status, context_pct, perm_mode.
     """
     is_cc = '\u276f' in text and ('\u23fa' in text or bool(re.search(r'Claude Code v\d', text)))
     if not is_cc:
-        return {"is_cc": False, "status": None, "context_pct": None, "perm_mode": None}
+        return {"is_cc": False, "status": None, "context_pct": None, "perm_mode": None, "fresh": False}
 
     lines = text.split('\n')
 
@@ -596,7 +623,8 @@ def detect_cc_status(text: str, activity_age: float = None) -> dict:
     else:
         status = 'idle'
 
-    return {"is_cc": True, "status": status, "context_pct": context_pct, "perm_mode": perm_mode}
+    fresh = '\u23fa' not in text
+    return {"is_cc": True, "status": status, "context_pct": context_pct, "perm_mode": perm_mode, "fresh": fresh}
 
 
 def get_dashboard() -> dict:
@@ -622,25 +650,14 @@ def get_dashboard() -> dict:
                 "attached": sattached == "1",
                 "windows": [],
             }
-        # Activity age: seconds since tmux last received output for this pane
-        try:
-            activity_age = now - int(wactivity)
-        except (ValueError, TypeError):
-            activity_age = None
-        # Get preview for CC detection and sidebar snippet (40 lines)
+        # Get preview for CC detection (40 lines)
         preview = get_pane_preview(sname, int(widx), lines=40)
-        cc = detect_cc_status(preview, activity_age=activity_age)
-        # Send last 40 lines for sidebar snippet extraction
-        preview_short = '\n'.join(preview.split('\n')[-40:])
-        # For CC sessions, use our tracked interaction time instead of tmux's
-        # window_activity (CC's TUI refreshes constantly, keeping it artificially recent)
-        interaction_key = f"{sname}:{widx}"
-        if cc["is_cc"]:
-            # Only show age if we've tracked an interaction from the UI
-            act_ts = int(_last_interaction[interaction_key]) if interaction_key in _last_interaction else None
-        elif activity_age is not None:
+        cc = detect_cc_status(preview)
+        # Always provide tmux window_activity as baseline fallback.
+        # Client prefers gauge_last_ts (JSONL) when available.
+        try:
             act_ts = int(wactivity)
-        else:
+        except (ValueError, TypeError):
             act_ts = None
         sessions[sname]["windows"].append({
             "index": int(widx),
@@ -653,7 +670,8 @@ def get_dashboard() -> dict:
             "cc_status": cc["status"],
             "cc_context_pct": cc["context_pct"],
             "cc_perm_mode": cc["perm_mode"],
-            "preview": preview_short,
+            "cc_fresh": cc.get("fresh", False),
+            "preview": preview,
             "activity_ts": act_ts,
         })
     # Enrich with gauge data (context window utilization from JSONL transcripts)
@@ -668,6 +686,8 @@ def get_dashboard() -> dict:
                     w["gauge_burn_rate"] = gauge["burn_rate"]
                     w["gauge_est_turns"] = gauge["est_turns_remaining"]
                     w["gauge_total_turns"] = gauge["total_turns"]
+                    if gauge.get("last_ts"):
+                        w["gauge_last_ts"] = gauge["last_ts"]
                     # Cross-validate: gauge remaining vs CC status bar remaining
                     cc_left = w.get("cc_context_pct")
                     if cc_left is not None:
@@ -898,7 +918,6 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .sb-hidden-header:hover { color:var(--text2); }
 .sb-hidden-chevron { transition:transform .15s; font-size:10px; }
 .sb-hidden-chevron.open { transform:rotate(90deg); }
-.sb-activity { font-size:var(--sb-detail); color:var(--text3); opacity:0.7; white-space:nowrap; }
 .sb-win { display:flex; align-items:center; gap:8px; padding:6px 4px; cursor:pointer;
   border-radius:8px; cursor:pointer; transition:all .12s;
   -webkit-user-select:none; user-select:none; }
@@ -913,25 +932,21 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .sb-win-dot.none { background:var(--text3); opacity:0.3; }
 .sb-win-info { flex:1; min-width:0; }
 .sb-win-name { font-size:var(--sb-name); font-weight:500; color:var(--text);
-  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:0; max-width:60%; }
+  max-width:120px; overflow-wrap:break-word; line-height:1.3; }
 .sb-win-cwd { font-size:var(--sb-detail); color:var(--text3);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .sb-perm { font-size:var(--sb-tiny); color:var(--text3); margin-top:1px;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.sb-win-right { flex-shrink:0; text-align:right; min-width:0; max-width:35%;
-  display:flex; flex-direction:column; align-items:flex-end; gap:1px; }
-.sb-win-status { font-size:var(--sb-detail); font-weight:500; color:var(--text3);
-  white-space:nowrap; }
-.sb-win-status.working, .sb-win-status.thinking { color:var(--orange); }
-.sb-win-status.idle { color:var(--green); }
-.sb-ctx { display:inline-block; font-size:var(--sb-tiny); color:var(--text3); margin-left:4px; }
+.sb-activity { flex-shrink:0; font-size:var(--sb-name); color:var(--text3);
+  white-space:nowrap; font-variant-numeric:tabular-nums; text-align:right; min-width:24px; }
+.sb-ctx { flex-shrink:0; font-size:var(--sb-name); color:var(--text3);
+  white-space:nowrap; font-variant-numeric:tabular-nums; text-align:right; min-width:30px; }
 .sb-ctx.low { color:var(--orange); font-weight:700; }
 .sb-ctx.critical { color:var(--red); font-weight:700; }
 .sb-perm.danger { color:#a07070; font-weight:600; font-style:italic; }
-.sb-snippet { font-size:var(--sb-detail); color:var(--text3);
-  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-  max-width:100%; font-style:italic; }
 .sb-standby { font-size:var(--sb-tiny); color:var(--blue, #5b9bd5); font-weight:600;
+  text-transform:uppercase; letter-spacing:0.5px; }
+.sb-fresh { font-size:var(--sb-tiny); color:var(--text3); font-weight:600;
   text-transform:uppercase; letter-spacing:0.5px; }
 .sb-win-detail-btn { background:none; border:none; color:var(--text3);
   font-size:16px; cursor:pointer; padding:2px 4px; border-radius:4px;
@@ -2856,43 +2871,6 @@ function statusLabel(cc_status) {
   if (cc_status === 'idle') return 'Standby';
   return '';
 }
-function extractSnippet(preview, isCC) {
-  // Extract a short snippet of the latest Claude response from terminal preview
-  if (!preview) return '';
-  const lines = preview.split('\\n');
-  if (isCC) {
-    // Find the last ⏺ line that isn't a tool call
-    let lastIdx = -1;
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const t = lines[i].replace(/\\u00a0/g, ' ').trim();
-      if (/^\\u23fa/.test(t)) {
-        const after = t.replace(/^\\u23fa\\s*/, '');
-        if (!/^(Bash|Read|Write|Update|Edit|Fetch|Search|Glob|Grep|Task|Skill|NotebookEdit|Searched for|Wrote \\d)/.test(after)) {
-          lastIdx = i; break;
-        }
-      }
-    }
-    if (lastIdx < 0) return '';
-    // Collect text from this ⏺ line forward until we hit a stop marker
-    let snippetLines = [];
-    for (let i = lastIdx; i < lines.length; i++) {
-      const raw = lines[i].replace(/\\u00a0/g, ' ');
-      const t = raw.trim();
-      if (/^\\u276f/.test(raw)) break;
-      if (/^\\s*\\u23f5/.test(t)) break;
-      if (/^[\\u2500\\u2501\\u2504\\u2508\\u2550]{3,}$/.test(t) && t.length > 20) break;
-      if (/^[\\u2720-\\u273f]/.test(t)) break;
-      if (/^\\u23bf/.test(t)) break;
-      if (/^\\u23fa/.test(t)) {
-        const after = t.replace(/^\\u23fa\\s*/, '');
-        if (/^(Bash|Read|Write|Update|Edit|Fetch|Search|Glob|Grep|Task|Skill|NotebookEdit|Searched for|Wrote \\d)/.test(after)) break;
-        if (after) snippetLines.push(after);
-      } else if (t) snippetLines.push(t);
-    }
-    return snippetLines.join(' ').substring(0, 120);
-  }
-  return '';
-}
 // === Hidden sessions ===
 function getHiddenSessions() {
   try { return JSON.parse(prefs.getItem('hidden-sessions') || '[]'); } catch { return []; }
@@ -2930,15 +2908,16 @@ function updateSidebarAges() {
     for (const w of s.windows) {
       const wid = s.name + ':' + w.index;
       const el = document.querySelector('.sb-activity[data-wid="' + wid + '"]');
-      if (el) el.textContent = ageFromTs(w.activity_ts);
+      if (el) el.textContent = ageFromTs(w.gauge_last_ts || w.activity_ts);
     }
   }
 }
 
 function detectCCStatus(text) {
   // Quick client-side CC status detection from output text
-  // Returns {status, contextPct, permMode} or null
+  // Returns {status, contextPct, permMode, fresh} or null
   if (!isClaudeCode(text)) return null;
+  const fresh = text.indexOf('\\u23fa') < 0;
   const lines = text.split('\\n');
   let status = 'idle', contextPct = null, permMode = null;
   // Check status bar (last line with ⏵) for "esc to interrupt", context %, and perm mode
@@ -2959,23 +2938,24 @@ function detectCCStatus(text) {
   }
   // Check for thinking indicator
   if (status === 'idle' && /^\\u00b7/m.test(lines.slice(-15).join('\\n'))) status = 'thinking';
-  return { status, contextPct, permMode };
+  return { status, contextPct, permMode, fresh };
 }
 function updateSidebarStatus(session, windowIndex, ccStatus, contextPct, permMode) {
   const wid = session + ':' + windowIndex;
   const dot = document.querySelector('.sb-win-dot[data-wid="' + wid + '"]');
-  const lbl = document.querySelector('.sb-win-status[data-wid="' + wid + '"]');
-  if (dot) { dot.className = 'sb-win-dot ' + (ccStatus || 'idle'); }
-  if (lbl) {
-    lbl.className = 'sb-win-status ' + (ccStatus || 'idle');
-    // Only update context % from status bar if we have it — don't wipe gauge data
-    if (contextPct != null) {
-      let ctx = lbl.querySelector('.sb-ctx');
-      if (!ctx) { ctx = document.createElement('span'); lbl.prepend(ctx); }
-      const cls = _ctxCls(contextPct);
-      ctx.className = 'sb-ctx' + (cls ? ' ' + cls : '');
-      ctx.textContent = contextPct + '%';
+  if (dot) { dot.className = 'sb-win-dot ' + (ccStatus == null ? 'none' : (ccStatus || 'idle')); }
+  // Update context % from status bar if we have it and no gauge data present
+  const winEl = dot && dot.closest('.sb-win');
+  if (winEl && contextPct != null) {
+    let ctx = winEl.querySelector('.sb-ctx');
+    if (!ctx) {
+      ctx = document.createElement('div'); ctx.className = 'sb-ctx';
+      const btn = winEl.querySelector('.sb-win-detail-btn');
+      winEl.insertBefore(ctx, btn);
     }
+    const cls = _ctxCls(contextPct);
+    ctx.className = 'sb-ctx' + (cls ? ' ' + cls : '');
+    ctx.textContent = contextPct + '%';
   }
   // Update perm mode label
   const permEl = document.querySelector('.sb-perm[data-wid="' + wid + '"]');
@@ -4218,10 +4198,8 @@ function removeQueueItem(tabId, idx) {
   }
   qs.items.splice(idx, 1);
   saveQueue(tabId);
-  // Re-render in the pane that has this tab
-  for (const p of panes) {
-    if (p.activeTabId === tabId) { renderQueuePanel(p.id); renderPaneTabs(p.id); break; }
-  }
+  const _p = paneForTab(tabId);
+  if (_p) { renderQueuePanel(_p.id); renderPaneTabs(_p.id); }
 }
 
 function clearCompletedQueue(paneId) {
@@ -4267,9 +4245,8 @@ function editQueueItem(tabId, idx, span) {
       saveQueue(tabId);
     }
     inp.classList.remove('qi-edit');
-    for (const p of panes) {
-      if (p.activeTabId === tabId) { renderQueuePanel(p.id); break; }
-    }
+    const _p = paneForTab(tabId);
+    if (_p) renderQueuePanel(_p.id);
   }
   inp.addEventListener('blur', save);
   inp.addEventListener('input', () => { inp.style.height = 'auto'; inp.style.height = Math.min(inp.scrollHeight, 80) + 'px'; });
@@ -4304,10 +4281,8 @@ function pauseQueue(tabId) {
   qs.playing = false;
   if (qs.idleTimer) { clearTimeout(qs.idleTimer); qs.idleTimer = null; }
   saveQueue(tabId);
-  // Re-render in the pane that has this tab
-  for (const p of panes) {
-    if (p.activeTabId === tabId) { renderQueuePanel(p.id); renderPaneTabs(p.id); break; }
-  }
+  const _p = paneForTab(tabId);
+  if (_p) { renderQueuePanel(_p.id); renderPaneTabs(_p.id); }
 }
 
 function scheduleQueueCheck(tabId) {
@@ -4336,9 +4311,8 @@ async function tryDispatchNext(tabId) {
   if (nextIdx < 0) {
     // All done
     qs.playing = false; qs.currentIdx = null;
-    for (const p of panes) {
-      if (p.activeTabId === tabId) { renderQueuePanel(p.id); renderPaneTabs(p.id); break; }
-    }
+    const _p = paneForTab(tabId);
+    if (_p) { renderQueuePanel(_p.id); renderPaneTabs(_p.id); }
     return;
   }
   qs.currentIdx = nextIdx;
@@ -4352,10 +4326,8 @@ async function tryDispatchNext(tabId) {
       body: JSON.stringify({ cmd: text, session: tab.session, window: tab.windowIndex, windowName: tab.windowName || '' })
     });
   } catch(e) { pauseQueue(tabId); }
-  for (const p of panes) {
-    if (p.activeTabId === tabId) { renderQueuePanel(p.id); break; }
-
-  }
+  const _p2 = paneForTab(tabId);
+  if (_p2) renderQueuePanel(_p2.id);
 }
 
 function notifyDone(tabId) {
@@ -4382,10 +4354,8 @@ function onQueueTaskCompleted(tabId) {
     qs.currentIdx = null;
     saveQueue(tabId);
   }
-  // Re-render and schedule next
-  for (const p of panes) {
-    if (p.activeTabId === tabId) { renderQueuePanel(p.id); break; }
-  }
+  const _p = paneForTab(tabId);
+  if (_p) renderQueuePanel(_p.id);
   scheduleQueueCheck(tabId);
 }
 
@@ -4539,11 +4509,12 @@ async function pollTab(tabId) {
     const clean = cleanTerminal(d.output);
     const live = detectCCStatus(clean);
     if (live) {
-      updateSidebarStatus(tab.session, tab.windowIndex, live.status, live.contextPct, live.permMode);
-      if (state.ccStatus !== live.status) {
-        state.ccStatus = live.status;
+      updateSidebarStatus(tab.session, tab.windowIndex, live.fresh ? null : live.status, live.contextPct, live.permMode);
+      const effectiveStatus = live.fresh ? null : live.status;
+      if (state.ccStatus !== effectiveStatus) {
+        state.ccStatus = effectiveStatus;
         const dot = document.querySelector('[data-tab-dot="' + tabId + '"]');
-        if (dot) dot.className = 'pane-tab-dot ' + (live.status || 'idle');
+        if (dot) dot.className = 'pane-tab-dot ' + (effectiveStatus || 'none');
       }
     } else if (state.ccStatus !== null) {
       state.ccStatus = null;
@@ -4580,6 +4551,9 @@ function updatePolling() {
 }
 
 // === Send ===
+function paneForTab(tabId) {
+  return panes.find(p => p.activeTabId === tabId) || null;
+}
 function getActiveTab() {
   if (!activePaneId) return null;
   const pane = panes.find(p => p.id === activePaneId);
@@ -4851,13 +4825,6 @@ function renderSidebar() {
       }
     }
   }
-  // Skip full DOM rebuild if only ages changed — update ages in-place instead
-  const htmlNoAge = html.replace(/<span class="sb-activity"[^>]*>[^<]*<\\/span>/g, '');
-  if (content._lastHTML === htmlNoAge) {
-    updateSidebarAges();
-    return;
-  }
-  content._lastHTML = htmlNoAge;
   content.innerHTML = html;
 }
 function renderSidebarSession(s, activeTab, isHidden) {
@@ -4885,37 +4852,33 @@ function renderSidebarSession(s, activeTab, isHidden) {
       + (s.attached ? ' <span class="sb-badge">attached</span>' : '') + hideBtn + '</div>';
   }
   for (const w of windows) {
-    const dotClass = w.is_cc ? (w.cc_status || 'idle') : 'none';
-    let status = '';
+    const dotClass = w.cc_fresh ? 'none' : w.is_cc ? (w.cc_status || 'idle') : 'none';
+    let ctxHtml = '';
     if (w.gauge_context_pct != null) {
       const pct = Math.round(w.gauge_context_pct);
       const cls = _ctxCls(pct);
-      status = '<span class="sb-ctx ' + (cls || '') + '">' + pct + '%' + (w.gauge_drift > 10 ? '!' : '') + '</span>';
+      ctxHtml = '<div class="sb-ctx ' + (cls || '') + '">' + pct + '%' + (w.gauge_drift > 10 ? '!' : '') + '</div>';
     } else if (w.cc_context_pct != null) {
       const cls = _ctxCls(w.cc_context_pct);
-      status = '<span class="sb-ctx ' + (cls || '') + '">' + w.cc_context_pct + '%</span>';
+      ctxHtml = '<div class="sb-ctx ' + (cls || '') + '">' + w.cc_context_pct + '%</div>';
     }
-    const age = ageFromTs(w.activity_ts);
+    const ageTs = w.gauge_last_ts || w.activity_ts;
+    const age = ageFromTs(ageTs);
     const wid_age = esc(s.name) + ':' + w.index;
-    if (age) status += (status ? ' ' : '') + '<span class="sb-activity" data-wid="' + wid_age + '">' + age + '</span>';
-    const statusClass = w.is_cc ? (w.cc_status || 'idle') : '';
+    const ageHtml = '<div class="sb-activity" data-wid="' + wid_age + '">' + age + '</div>';
     const wid = esc(s.name) + ':' + w.index;
     const isActive = activeTab && activeTab.session === s.name && activeTab.windowIndex === w.index;
-    const snippet = (w.is_cc && w.cc_status === 'idle') ? extractSnippet(w.preview, true) : '';
     const sEsc = esc(s.name).replace(/'/g, "\\\\'");
     const wEsc = esc(w.name).replace(/'/g, "\\\\'");
     html += '<div class="sb-win' + (isActive ? ' active' : '') + '" draggable="true" data-session="' + esc(s.name) + '" data-widx="' + w.index + '" onclick="openTab(\\'' + sEsc + '\\',' + w.index + ',\\'' + wEsc + '\\')">'
       + '<div class="sb-win-dot ' + dotClass + '" data-wid="' + wid + '"></div>'
       + '<div class="sb-win-info">'
       + '<div class="sb-win-name">' + esc(w.name) + '</div>'
-      + (getStandby(s.name, w.index) ? '<div class="sb-standby">Standby</div>' : '')
-      + (snippet ? '<div class="sb-snippet" title="' + esc(snippet) + '">' + esc(snippet) + '</div>' : '')
+      + (getStandby(s.name, w.index) ? '<div class="sb-standby">Standby</div>' : w.cc_fresh ? '<div class="sb-fresh">CLEAR</div>' : '')
       + (_sidebarExpanded ? '<div class="sb-win-cwd">' + esc(abbreviateCwd(w.cwd)) + '</div>' : '')
       + (_sidebarExpanded && w.is_cc ? '<div class="sb-perm' + (w.cc_perm_mode && /dangerously|skip|bypass/i.test(w.cc_perm_mode) ? ' danger' : '') + '" data-wid="' + wid + '">' + (w.cc_perm_mode ? esc(w.cc_perm_mode) : '') + '</div>' : '')
       + '</div>'
-      + '<div class="sb-win-right">'
-      + '<div class="sb-win-status ' + statusClass + '" data-wid="' + wid + '">' + status + '</div>'
-      + '</div>'
+      + ageHtml + ctxHtml
       + '<button class="sb-win-detail-btn" onclick="event.stopPropagation();openWD(\\'' + sEsc + '\\',' + w.index + ')" title="Details">&#8942;</button>'
       + '</div>';
   }
@@ -5207,7 +5170,7 @@ async function loadDashboard() {
           // Update tab dot from dashboard CC status (covers background tabs)
           const st = tabStates[tid];
           if (st) {
-            const newStatus = win.is_cc ? (win.cc_status || 'idle') : null;
+            const newStatus = win.cc_fresh ? null : win.is_cc ? (win.cc_status || 'idle') : null;
             if (st.ccStatus !== newStatus) {
               st.ccStatus = newStatus;
               const dot = document.querySelector('[data-tab-dot="' + tid + '"]');
@@ -5468,14 +5431,17 @@ init();
 
 @app.get("/")
 async def index():
-    ensure_session()
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, ensure_session)
     html = HTML.replace("__TITLE__", TITLE)
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/output")
 async def api_output(session: str = None, window: int = None):
-    return JSONResponse({"output": get_output(session, window)})
+    loop = asyncio.get_running_loop()
+    output = await loop.run_in_executor(None, get_output, session, window)
+    return JSONResponse({"output": output})
 
 
 @app.post("/api/send")
@@ -5485,7 +5451,8 @@ async def api_send(body: dict):
     window = body.get("window", None)
     window_name = body.get("windowName", "")
     if cmd:
-        send_keys(cmd, session, window)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, send_keys, cmd, session, window)
         s = session or _current_session
         w = window if window is not None else 0
         key = f"{s}:{w}"
@@ -5504,7 +5471,8 @@ async def api_send(body: dict):
 async def api_key(key: str, session: str = None, window: int = None):
     ALLOWED = {"C-c", "C-d", "C-l", "C-z", "Up", "Down", "Left", "Right", "Tab", "Enter", "Escape"}
     if key in ALLOWED:
-        send_special(key, session, window)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, send_special, key, session, window)
         s = session or _current_session
         w = window if window is not None else 0
         _last_interaction[f"{s}:{w}"] = time.time()
@@ -5513,7 +5481,9 @@ async def api_key(key: str, session: str = None, window: int = None):
 
 @app.get("/api/dashboard")
 async def api_dashboard():
-    return JSONResponse(get_dashboard())
+    loop = asyncio.get_running_loop()
+    data = await loop.run_in_executor(None, get_dashboard)
+    return JSONResponse(data)
 
 
 @app.post("/api/notify")
@@ -5532,18 +5502,22 @@ async def api_notify(body: dict):
 
 @app.get("/api/windows")
 async def api_windows():
-    return JSONResponse({"windows": list_windows()})
+    loop = asyncio.get_running_loop()
+    windows = await loop.run_in_executor(None, list_windows)
+    return JSONResponse({"windows": windows})
 
 
 @app.post("/api/windows/new")
 async def api_new_window(body: dict = {}):
-    new_window(session=body.get("session"))
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, new_window, body.get("session"))
     return JSONResponse({"ok": True})
 
 
 @app.post("/api/windows/{index}")
 async def api_select_window(index: int):
-    select_window(index)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, select_window, index)
     return JSONResponse({"ok": True})
 
 
@@ -5551,18 +5525,24 @@ async def api_select_window(index: int):
 async def api_rename_current_window(body: dict):
     name = body.get("name", "").strip()
     if name:
-        target = _current_session
-        _run(["tmux", "rename-window", "-t", target, name])
-        _run(["tmux", "set-window-option", "-t", target, "allow-rename", "off"])
-        _run(["tmux", "set-window-option", "-t", target, "automatic-rename", "off"])
+        def _do():
+            target = _current_session
+            _run(["tmux", "rename-window", "-t", target, name])
+            _run(["tmux", "set-window-option", "-t", target, "allow-rename", "off"])
+            _run(["tmux", "set-window-option", "-t", target, "automatic-rename", "off"])
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _do)
     return JSONResponse({"ok": True})
 
 
 @app.post("/api/windows/current/reset-name")
 async def api_reset_window_name():
-    target = _current_session
-    _run(["tmux", "set-window-option", "-t", target, "automatic-rename", "on"])
-    _run(["tmux", "set-window-option", "-t", target, "allow-rename", "on"])
+    def _do():
+        target = _current_session
+        _run(["tmux", "set-window-option", "-t", target, "automatic-rename", "on"])
+        _run(["tmux", "set-window-option", "-t", target, "allow-rename", "on"])
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _do)
     return JSONResponse({"ok": True})
 
 
@@ -5571,49 +5551,60 @@ async def api_rename_window(index: int, body: dict):
     name = body.get("name", "").strip()
     session = body.get("session", _current_session)
     if name:
-        target = f"{session}:{index}"
-        _run(["tmux", "rename-window", "-t", target, name])
-        _run(["tmux", "set-window-option", "-t", target, "allow-rename", "off"])
-        _run(["tmux", "set-window-option", "-t", target, "automatic-rename", "off"])
+        def _do():
+            target = f"{session}:{index}"
+            _run(["tmux", "rename-window", "-t", target, name])
+            _run(["tmux", "set-window-option", "-t", target, "allow-rename", "off"])
+            _run(["tmux", "set-window-option", "-t", target, "automatic-rename", "off"])
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _do)
     return JSONResponse({"ok": True})
 
 
 @app.delete("/api/windows/{index}")
 async def api_close_window(index: int, session: str = None):
     sess = session or _current_session
-    _run(["tmux", "kill-window", "-t", f"{sess}:{index}"])
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _run, ["tmux", "kill-window", "-t", f"{sess}:{index}"])
     return JSONResponse({"ok": True})
 
 
 @app.get("/api/sessions")
 async def api_sessions():
+    loop = asyncio.get_running_loop()
+    sessions = await loop.run_in_executor(None, list_sessions)
     return JSONResponse({
         "current": _current_session,
-        "sessions": list_sessions(),
+        "sessions": sessions,
     })
 
 
 @app.get("/api/pane-info")
 async def api_pane_info():
-    r = _run(
-        ["tmux", "display-message", "-t", _current_session, "-p",
-         "#{pane_current_path}\n#{pane_pid}\n#{window_name}\n#{session_name}"],
-        capture_output=True, text=True,
-    )
-    parts = r.stdout.strip().split("\n")
-    return JSONResponse({
-        "cwd": parts[0] if len(parts) > 0 else "",
-        "pid": parts[1] if len(parts) > 1 else "",
-        "window": parts[2] if len(parts) > 2 else "",
-        "session": parts[3] if len(parts) > 3 else "",
-    })
+    def _do():
+        r = _run(
+            ["tmux", "display-message", "-t", _current_session, "-p",
+             "#{pane_current_path}\n#{pane_pid}\n#{window_name}\n#{session_name}"],
+            capture_output=True, text=True,
+        )
+        parts = r.stdout.strip().split("\n")
+        return {
+            "cwd": parts[0] if len(parts) > 0 else "",
+            "pid": parts[1] if len(parts) > 1 else "",
+            "window": parts[2] if len(parts) > 2 else "",
+            "session": parts[3] if len(parts) > 3 else "",
+        }
+    loop = asyncio.get_running_loop()
+    data = await loop.run_in_executor(None, _do)
+    return JSONResponse(data)
 
 
 @app.post("/api/sessions/{name}")
 async def api_switch_session(name: str):
     global _current_session
-    # Verify session exists
-    r = _run(["tmux", "has-session", "-t", name], capture_output=True)
+    loop = asyncio.get_running_loop()
+    r = await loop.run_in_executor(
+        None, _run, ["tmux", "has-session", "-t", name])
     if r.returncode != 0:
         return JSONResponse({"ok": False, "error": "Session not found"}, status_code=404)
     _current_session = name
@@ -5625,10 +5616,16 @@ async def api_rename_session(name: str, body: dict):
     new_name = body.get("name", "").strip()
     if not new_name:
         return JSONResponse({"ok": False, "error": "Name required"}, status_code=400)
-    r = _run(["tmux", "has-session", "-t", name], capture_output=True)
-    if r.returncode != 0:
+    def _do():
+        r = _run(["tmux", "has-session", "-t", name], capture_output=True)
+        if r.returncode != 0:
+            return False
+        _run(["tmux", "rename-session", "-t", name, new_name])
+        return True
+    loop = asyncio.get_running_loop()
+    ok = await loop.run_in_executor(None, _do)
+    if not ok:
         return JSONResponse({"ok": False, "error": "Session not found"}, status_code=404)
-    _run(["tmux", "rename-session", "-t", name, new_name])
     global _current_session
     if _current_session == name:
         _current_session = new_name
@@ -5670,8 +5667,17 @@ async def api_put_prefs(body: dict):
 
 # --- File browser helpers ---
 
+_session_cwds_cache = None
+_session_cwds_time = 0
+_SESSION_CWDS_TTL = 5  # seconds — cwds rarely change
+
+
 def _get_session_cwds():
-    """Get unique working directories from all tmux panes (lightweight, no capture-pane)."""
+    """Get unique working directories from all tmux panes (cached, 5s TTL)."""
+    global _session_cwds_cache, _session_cwds_time
+    now = time.time()
+    if _session_cwds_cache is not None and now - _session_cwds_time < _SESSION_CWDS_TTL:
+        return _session_cwds_cache
     r = _run(
         ["tmux", "list-panes", "-a", "-F", "#{pane_current_path}"],
         capture_output=True, text=True,
@@ -5681,6 +5687,8 @@ def _get_session_cwds():
         line = line.strip()
         if line:
             cwds.add(os.path.realpath(line))
+    _session_cwds_cache = cwds
+    _session_cwds_time = now
     return cwds
 
 

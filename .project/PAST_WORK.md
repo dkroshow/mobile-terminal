@@ -1,6 +1,13 @@
 # Past Work
 
-Items moved from CURRENT_WORK.md on 2026-03-08.
+Items moved from CURRENT_WORK.md on 2026-03-10.
+
+## 2026-03-09
+- Context gauge UX — moved to input bar, fixed % remaining semantics, unified `_ctxCls()` color coding
+- Context gauge integration — inlined JSONL-based context window utilization, per-window matching, sidebar/pane/modal display
+
+## 2026-03-08
+- Context gauge integration — inlined JSONL-based context window utilization into server.py
 
 ## 2026-03-07
 - Fix Raw view word-wrap rejoining — `[a-z]` → `[a-zA-Z]`, `max - 4` → `max * 0.85` threshold, `(  \S|⏺|❯)` on prev-line check
