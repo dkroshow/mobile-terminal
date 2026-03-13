@@ -496,7 +496,8 @@ def _tmux_target(session=None, window=None):
     return s
 
 
-def send_keys(text: str, session=None, window=None):
+def send_keys(text: str, session=None, window=None) -> bool:
+    """Send text to tmux pane. Returns True on success, False on failure."""
     target = _tmux_target(session, window)
     # Slash commands (/exit, /clear, etc.) must be TYPED not pasted for CC's TUI
     # to recognize them. send-keys -l sends literal keystrokes, which is reliable
@@ -505,10 +506,12 @@ def send_keys(text: str, session=None, window=None):
     is_slash_cmd = text.startswith("/") and "\n" not in text
     if is_slash_cmd:
         # Skip Escape+C-u for slash commands — Escape interferes with CC's TUI state.
-        _run(["tmux", "send-keys", "-l", "-t", target, text])
+        r = _run(["tmux", "send-keys", "-l", "-t", target, text])
+        if r.returncode != 0:
+            return False
         time.sleep(0.05)
         _run(["tmux", "send-keys", "-t", target, "Enter"])
-        return
+        return True
     # Escape dismisses any active CC suggestion/autocomplete, C-u clears the line
     _run(["tmux", "send-keys", "-t", target, "Escape"])
     _run(["tmux", "send-keys", "-t", target, "C-u"])
@@ -519,14 +522,17 @@ def send_keys(text: str, session=None, window=None):
     buf_name = "_mt_paste"
     r = _run(["tmux", "load-buffer", "-b", buf_name, "-"], input=text.encode())
     if r.returncode != 0:
-        return  # Don't send Enter if buffer load failed
+        return False  # Don't send Enter if buffer load failed
     is_multiline = "\n" in text
     paste_cmd = ["tmux", "paste-buffer", "-d", "-b", buf_name, "-t", target]
     if is_multiline:
         paste_cmd.insert(3, "-p")  # Bracketed paste only for multiline
-    _run(paste_cmd)
+    r = _run(paste_cmd)
+    if r.returncode != 0:
+        return False
     time.sleep(0.05)  # Let TUI process paste before sending Enter
     _run(["tmux", "send-keys", "-t", target, "Enter"])
+    return True
 
 
 def send_special(key: str, session=None, window=None):
@@ -743,10 +749,23 @@ def list_windows() -> list:
     return windows
 
 
-def new_window(session=None):
+def new_window(session=None, cwd=None, commands=None):
     target = session or _current_session
-    work_dir = WORK_DIR if Path(WORK_DIR).is_dir() else str(Path.home())
-    _run(["tmux", "new-window", "-t", target, "-c", work_dir])
+    work_dir = cwd or WORK_DIR
+    if not Path(work_dir).is_dir():
+        work_dir = str(Path.home())
+    _run(["tmux", "new-window", "-t", target, "-c", work_dir, "-P", "-F", "#{window_index}"],
+         capture_output=True, text=True)
+    # Get the new window's index (it's the active window now)
+    r = _run(["tmux", "display-message", "-t", target, "-p", "#{window_index}"],
+             capture_output=True, text=True)
+    new_idx = r.stdout.strip()
+    # Send startup commands if any
+    if commands and new_idx:
+        for cmd in commands:
+            send_keys(cmd, session=target, window=new_idx)
+            time.sleep(0.1)
+    return int(new_idx) if new_idx else None
 
 
 def select_window(index: int):
@@ -1380,6 +1399,28 @@ a.file-link:active { opacity:0.6; }
 .wd-btn-dismiss { background:var(--surface); color:var(--text2); }
 .wd-btn-dismiss.active { background:rgba(91,155,213,0.15); color:#5b9bd5; }
 
+/* New window modal */
+#nw-overlay { display:none; position:fixed; inset:0; z-index:100;
+  background:rgba(0,0,0,0.6); align-items:center; justify-content:center; }
+#nw-overlay.open { display:flex; }
+#nw-modal { background:var(--bg2); border:1px solid var(--border2);
+  border-radius:16px; padding:20px; width:min(340px, 85vw); position:relative; }
+#nw-modal h3 { font-size:14px; font-weight:600; color:var(--text); margin-bottom:14px; }
+#nw-dir-input { width:100%; background:var(--surface); color:var(--text);
+  border:1px solid var(--border2); border-radius:8px; padding:8px 12px;
+  font-size:13px; font-family:'SF Mono',ui-monospace,Menlo,monospace; outline:none;
+  box-sizing:border-box; }
+#nw-dir-input:focus { border-color:var(--accent-focus); }
+.nw-check-row { display:flex; align-items:center; gap:8px; padding:8px 0; cursor:pointer; }
+.nw-check-row input[type="checkbox"] { width:18px; height:18px; accent-color:var(--accent);
+  cursor:pointer; flex-shrink:0; }
+.nw-check-row label { color:var(--text2); font-size:13px; cursor:pointer; user-select:none; }
+.nw-check-row .nw-sub { color:var(--text3); font-size:11px; }
+#nw-create-btn { width:100%; padding:10px; margin-top:8px; background:var(--accent); color:#fff;
+  border:none; border-radius:8px; font-size:14px; font-weight:500;
+  font-family:inherit; cursor:pointer; }
+#nw-create-btn:active { opacity:0.8; }
+
 /* File browser overlay */
 #fb-overlay { display:none; position:fixed; inset:0; z-index:100;
   background:var(--bg); flex-direction:column; }
@@ -1706,6 +1747,28 @@ a.file-link:active { opacity:0.6; }
       <button id="wd-standby-btn" class="wd-btn-dismiss" onclick="toggleWDStandby()">Set Standby</button>
       <button class="wd-btn-dismiss" onclick="closeWDWindow()" style="color:var(--red)">Close Window</button>
     </div>
+  </div>
+</div>
+
+<div id="nw-overlay" onclick="if(event.target===this)closeNewWin()">
+  <div id="nw-modal">
+    <button class="wd-close-x" onclick="closeNewWin()" title="Close">&times;</button>
+    <h3>New Window</h3>
+    <div style="margin-bottom:8px">
+      <div style="color:var(--text3);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">Directory</div>
+      <input id="nw-dir-input" type="text" placeholder="/path/to/directory"
+        autocorrect="off" autocapitalize="none" spellcheck="false"
+        onkeydown="if(event.key==='Enter'){event.preventDefault();submitNewWin()}">
+    </div>
+    <div class="nw-check-row" onclick="document.getElementById('nw-claude-cb').click()">
+      <input type="checkbox" id="nw-claude-cb" checked onclick="event.stopPropagation(); toggleNwDsp()">
+      <label onclick="event.stopPropagation()">Open Claude Code</label>
+    </div>
+    <div class="nw-check-row" id="nw-dsp-row" onclick="document.getElementById('nw-dsp-cb').click()">
+      <input type="checkbox" id="nw-dsp-cb" checked onclick="event.stopPropagation()">
+      <label onclick="event.stopPropagation()">--dangerously-skip-permissions</label>
+    </div>
+    <button id="nw-create-btn" onclick="submitNewWin()">Create</button>
   </div>
 </div>
 
@@ -3488,9 +3551,11 @@ function focusTab(tabId) {
       if (tabChanged && p.activeTabId && tabStates[p.activeTabId]) {
         const paneEl = document.getElementById('pane-' + p.id);
         const ta = paneEl && paneEl.querySelector('.pane-input textarea');
-        tabStates[p.activeTabId].draft = ta ? ta.value : '';
+        // If a send is in-flight, textarea was cleared optimistically — use backup text, not empty textarea
+        const _st = tabStates[p.activeTabId];
+        tabStates[p.activeTabId].draft = _st._sendingText || (ta ? ta.value : '');
         // Also save global textarea draft
-        if (M) tabStates[p.activeTabId].globalDraft = M.value;
+        if (M) tabStates[p.activeTabId].globalDraft = _st._sendingText || M.value;
       }
       p.activeTabId = tabId;
       focusPane(p.id);
@@ -4557,31 +4622,40 @@ function getActiveTab() {
 async function sendToPane(paneId) {
   const pane = panes.find(p => p.id === paneId);
   if (!pane || !pane.activeTabId) return;
-  if (allTabs[pane.activeTabId] && allTabs[pane.activeTabId].type === 'file') return;
+  const tabId = pane.activeTabId;
+  if (allTabs[tabId] && allTabs[tabId].type === 'file') return;
   const paneEl = document.getElementById('pane-' + paneId);
   if (!paneEl) return;
   const ta = paneEl.querySelector('.pane-input textarea');
   if (!ta) return;
   const text = ta.value; if (!text) return;
-  const tab = allTabs[pane.activeTabId];
-  const state = tabStates[pane.activeTabId];
+  const tab = allTabs[tabId];
+  const state = tabStates[tabId];
   if (!tab || !state) return;
+  // Save backup in state BEFORE clearing textarea — protects against draft system race
+  state._sendingText = text;
   ta.value = ''; ta.style.height = 'auto'; ta.style.overflowY = 'hidden';
   try {
     state.pendingMsg = text; state.pendingTime = Date.now(); state.awaitingResponse = true;
     // Pause queue on manual send
-    const qs = _queueStates[pane.activeTabId];
-    if (qs && qs.playing) pauseQueue(pane.activeTabId);
-    const outEl = document.getElementById('tab-output-' + pane.activeTabId);
-    if (outEl) { renderOutput(state.rawContent || state.last, outEl, state, pane.activeTabId); outEl.scrollTop = outEl.scrollHeight; }
+    const qs = _queueStates[tabId];
+    if (qs && qs.playing) pauseQueue(tabId);
+    try {
+      const outEl = document.getElementById('tab-output-' + tabId);
+      if (outEl) { renderOutput(state.rawContent || state.last, outEl, state, tabId); outEl.scrollTop = outEl.scrollHeight; }
+    } catch(re) {} // renderOutput failure must not abort send
     const resp = await fetch('/api/send', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ cmd: text, session: tab.session, window: tab.windowIndex, windowName: tab.windowName || '' })
     });
-    if (!resp.ok) throw new Error('send failed');
+    if (!resp.ok) throw new Error('send failed: ' + resp.status);
+    state._sendingText = null;
   } catch(e) {
-    // Restore text so user doesn't lose input
-    ta.value = text; ta.dispatchEvent(new Event('input'));
+    console.warn('sendToPane failed:', e);
+    state._sendingText = null;
+    // Restore text — re-query textarea in case pane was restructured
+    const ta2 = document.querySelector('#pane-' + paneId + ' .pane-input textarea');
+    if (ta2) { ta2.value = text; ta2.dispatchEvent(new Event('input')); }
     state.pendingMsg = null; state.awaitingResponse = false;
   }
 }
@@ -4590,21 +4664,27 @@ async function sendGlobal() {
   const text = M.value; if (!text) return;
   const active = getActiveTab(); if (!active) return;
   if (allTabs[active.tabId] && allTabs[active.tabId].type === 'file') return;
+  // Save backup in state BEFORE clearing textarea — protects against draft system race
+  active.state._sendingText = text;
   M.value = ''; M.style.height = 'auto'; M.style.overflowY = 'hidden';
   try {
     active.state.pendingMsg = text; active.state.pendingTime = Date.now(); active.state.awaitingResponse = true;
     // Pause queue on manual send
     const qsg = _queueStates[active.tabId];
     if (qsg && qsg.playing) pauseQueue(active.tabId);
-    const outEl = document.getElementById('tab-output-' + active.tabId);
-    if (outEl) { renderOutput(active.state.rawContent || active.state.last, outEl, active.state, active.tabId); outEl.scrollTop = outEl.scrollHeight; }
+    try {
+      const outEl = document.getElementById('tab-output-' + active.tabId);
+      if (outEl) { renderOutput(active.state.rawContent || active.state.last, outEl, active.state, active.tabId); outEl.scrollTop = outEl.scrollHeight; }
+    } catch(re) {} // renderOutput failure must not abort send
     const resp = await fetch('/api/send', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ cmd: text, session: active.tab.session, window: active.tab.windowIndex, windowName: active.tab.windowName || '' })
     });
-    if (!resp.ok) throw new Error('send failed');
+    if (!resp.ok) throw new Error('send failed: ' + resp.status);
+    active.state._sendingText = null;
   } catch(e) {
-    // Restore text so user doesn't lose input
+    console.warn('sendGlobal failed:', e);
+    active.state._sendingText = null;
     M.value = text; M.dispatchEvent(new Event('input'));
     active.state.pendingMsg = null; active.state.awaitingResponse = false;
   }
@@ -5177,21 +5257,78 @@ async function loadDashboard() {
   } catch(e) {}
 }
 
-async function newWin() {
-  // Determine target session from active tab
+function _nwGetSession() {
   let sessName = null;
   const ap = panes.find(p => p.id === activePaneId);
   if (ap && ap.activeTabId != null && allTabs[ap.activeTabId]) sessName = allTabs[ap.activeTabId].session;
   if (!sessName) { for (const tid in allTabs) { sessName = allTabs[tid].session; break; } }
   if (!sessName && _dashboardData && _dashboardData.sessions.length > 0) sessName = _dashboardData.sessions[0].name;
+  return sessName;
+}
+function _nwGetCwd() {
+  // Get cwd from active tab's session — use the most common cwd among session windows
+  const sessName = _nwGetSession();
+  if (!sessName || !_dashboardData) return '';
+  const sess = _dashboardData.sessions.find(s => s.name === sessName);
+  if (!sess || !sess.windows.length) return '';
+  // Use active tab's cwd if available, otherwise most common cwd in session
+  const ap = panes.find(p => p.id === activePaneId);
+  if (ap && ap.activeTabId != null) {
+    const tab = allTabs[ap.activeTabId];
+    if (tab && tab.type !== 'file') {
+      const win = sess.windows.find(w => w.index === tab.windowIndex);
+      if (win && win.cwd) return win.cwd;
+    }
+  }
+  return sess.windows[0].cwd || '';
+}
+function newWin() {
+  // Pre-populate and show modal
+  document.getElementById('nw-dir-input').value = _nwGetCwd();
+  document.getElementById('nw-claude-cb').checked = true;
+  document.getElementById('nw-dsp-cb').checked = true;
+  toggleNwDsp();
+  document.getElementById('nw-overlay').classList.add('open');
+}
+function closeNewWin() {
+  document.getElementById('nw-overlay').classList.remove('open');
+}
+function toggleNwDsp() {
+  const show = document.getElementById('nw-claude-cb').checked;
+  document.getElementById('nw-dsp-row').style.display = show ? 'flex' : 'none';
+}
+async function submitNewWin() {
+  const sessName = _nwGetSession();
+  const cwd = document.getElementById('nw-dir-input').value.trim();
+  const openClaude = document.getElementById('nw-claude-cb').checked;
+  const dsp = document.getElementById('nw-dsp-cb').checked;
+  closeNewWin();
+  const commands = [];
+  if (openClaude) {
+    let cmd = 'claude';
+    if (dsp) cmd += ' --dangerously-skip-permissions';
+    commands.push(cmd);
+  }
+  let newIdx = null;
   try {
-    await fetch('/api/windows/new', {
+    const resp = await fetch('/api/windows/new', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ session: sessName })
+      body: JSON.stringify({ session: sessName, cwd: cwd || undefined, commands: commands.length ? commands : undefined })
     });
+    const data = await resp.json();
+    newIdx = data.index;
   } catch(e) { return; }
   await loadDashboard();
+  // Focus the new window tab using returned index
+  if (_dashboardData && sessName && newIdx != null) {
+    const sess = _dashboardData.sessions.find(s => s.name === sessName);
+    if (sess) {
+      const w = sess.windows.find(w => w.index === newIdx);
+      if (w) { createTab(sessName, w.index, w.name); return; }
+    }
+  }
+  // Fallback: focus last window in session
   if (_dashboardData && sessName) {
     const sess = _dashboardData.sessions.find(s => s.name === sessName);
     if (sess && sess.windows.length > 0) {
@@ -5445,7 +5582,9 @@ async def api_send(body: dict):
     window_name = body.get("windowName", "")
     if cmd:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, send_keys, cmd, session, window)
+        ok = await loop.run_in_executor(None, send_keys, cmd, session, window)
+        if not ok:
+            return JSONResponse({"ok": False, "error": "tmux send failed"}, status_code=500)
         s = session or _current_session
         w = window if window is not None else 0
         key = f"{s}:{w}"
@@ -5503,8 +5642,12 @@ async def api_windows():
 @app.post("/api/windows/new")
 async def api_new_window(body: dict = {}):
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, new_window, body.get("session"))
-    return JSONResponse({"ok": True})
+    idx = await loop.run_in_executor(None, lambda: new_window(
+        session=body.get("session"),
+        cwd=body.get("cwd"),
+        commands=body.get("commands"),
+    ))
+    return JSONResponse({"ok": True, "index": idx})
 
 
 @app.post("/api/windows/{index}")
