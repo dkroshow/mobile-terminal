@@ -20,6 +20,13 @@ See `.project/PAST_WORK.md` for older history.
 
 ## Session Notes
 
+### Session 2026-03-13 (deploy perf fix)
+- Server at 95.5% CPU — `run_in_executor` fixes from earlier saved to disk but never deployed (server running stale blocking code)
+- Restarted via `launchctl unload/load` — CPU dropped to 1.1%, page load ~40ms, output poll ~30ms
+- User's text entry and rename issues confirmed resolved (were caused by blocked event loop queueing requests for 10+ seconds)
+- Updated CLAUDE.md with 2 critical constraints (must restart after edit, must use run_in_executor)
+- Updated restart learning with performance diagnosis angle, created file-knowledge-map.md
+
 ### Session 2026-03-13 (new window popup + text loss fix)
 - New window modal: `#nw-overlay` / `#nw-modal`, pre-populates cwd from `_dashboardData`, checkboxes default to checked
 - Backend `new_window()` now accepts `cwd`, `commands` params; returns new window index via `tmux display-message`
@@ -31,16 +38,6 @@ See `.project/PAST_WORK.md` for older history.
 - GAUGE_THRESHOLD: 165k too low (showed 1% when CC not worried), 200k too high (showed 17% during compaction), 170k is the sweet spot based on 18 observed compression points (max 168,248, median 166,624)
 - `cc_fresh` windows now evict their gauge lock via `_gauge_save_locks()` and skip gauge enrichment in `get_dashboard()`
 - Compression typically triggers at 163-168k tokens; CC's "Context left until auto-compact: X%" matches this range
-
-### Session 2026-03-10 (sidebar timestamps)
-- `_gauge_extract_usage()` returns `(usage_list, last_epoch)` tuple; `_gauge_compute()` includes `last_ts`
-- Dashboard exposes `gauge_last_ts` per window; client uses `w.gauge_last_ts || w.activity_ts`
-- Removed `extractSnippet()`, `.sb-snippet`, `sb-win-status` wrapper, `sb-win-right` wrapper
-- Sidebar: `[dot] [name] [age] [ctx%] [kebab]` — direct flex children of `.sb-win`
-- `detect_cc_status()` returns `fresh` when no `⏺` in output; gray dot in sidebar + tab
-- Newer-JSONL eviction added then reverted — caused cache invalidation every cycle
-- Removed `htmlNoAge` sidebar cache — was source of blank timestamps
-- `activity_ts` always populated from tmux `window_activity` (removed CC-specific conditional)
 
 ## Up Next
 - Investigate iOS Safari blank timestamps on actual device
