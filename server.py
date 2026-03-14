@@ -119,7 +119,11 @@ def _gauge_extract_usage(jsonl_path: str) -> tuple:
 
 def _gauge_threshold_for_model(model: str) -> int:
     """Return the appropriate gauge threshold based on model context window size."""
-    if model and "1m" in model:
+    if not model:
+        return GAUGE_THRESHOLD_200K
+    m = model.lower()
+    # Claude 4.6 models (opus-4-6, sonnet-4-6) have 1M context
+    if "4-6" in m or "4.6" in m or "1m" in m:
         return GAUGE_THRESHOLD_1M
     return GAUGE_THRESHOLD_200K
 

@@ -20,7 +20,7 @@ User reported gauge showing 1% remaining when CC wasn't showing any warning (thr
 ## What Works
 - **GAUGE_THRESHOLD_200K = 170k**: Derived from 18 observed compression events. Max was 168,248, median 166,624.
 - **GAUGE_THRESHOLD_1M = 1M**: Full window for now — auto-compact ceiling TBD (needs empirical observation).
-- **Model detection**: `message.model` field in assistant JSONL entries; `"1m"` substring check distinguishes 1M models.
+- **Model detection**: `message.model` field in assistant JSONL entries; checks for `"4-6"` (Claude 4.6 family = 1M context), `"4.6"`, or `"1m"` substring. Original `"1m"` check was broken — actual model IDs (`claude-opus-4-6`, `claude-sonnet-4-6`) don't contain "1m".
 
 ## Key Files
 - `server.py` lines 43-44: `GAUGE_THRESHOLD_200K` / `GAUGE_THRESHOLD_1M`
