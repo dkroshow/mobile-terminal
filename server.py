@@ -3178,7 +3178,7 @@ function renderOutput(raw, targetEl, state, tabId) {
     for (let k = 1; k < dLines.length; k++) {
       const prev = jLines[jLines.length - 1];
       const cur = dLines[k];
-      if (prev.length >= wrapW && /^(  \\S|\\u23FA|\\u276F)/.test(prev) && /^  [a-zA-Z]/.test(cur)) {
+      if (prev.length >= wrapW && /^( {2,}\\S|\\u23FA|\\u276F)/.test(prev) && /^ {2,}[a-zA-Z]/.test(cur)) {
         jLines[jLines.length - 1] = prev + ' ' + cur.trimStart();
       } else { jLines.push(cur); }
     }

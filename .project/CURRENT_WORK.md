@@ -16,6 +16,10 @@ None currently active.
 
 ## Session Notes
 
+### Session 2026-03-13 (raw view wrap-rejoin fix)
+- Wrap-rejoin regex required exactly 2-space indent — CC TUI bullet continuations with 3+ spaces weren't joined, leaving broken lines
+- Changed `^  \\S` → `^ {2,}\\S` and `^  [a-zA-Z]` → `^ {2,}[a-zA-Z]`
+
 ### Session 2026-03-13 (focusTab crash + new_window race)
 - `focusTab` crash: `state` used before `const` declaration in notepadOpen check → crashed init → "Connecting..." on page load
 - `new_window()` race: ignored `-P -F` output from `tmux new-window`, ran separate `display-message` — race between calls sent startup commands to wrong window (current pane instead of new one)
@@ -25,10 +29,6 @@ None currently active.
 - **Critical fixes**: `--accent-focus` CSS self-reference (focus rings broken), 6 file I/O endpoints missing `run_in_executor` (same bug class as 95% CPU incident), sidebar sort comparator returning wrong sign for `ib < 0` case (2 occurrences)
 - **Deduplication**: `sendToPane`/`sendGlobal` → shared `_sendCmd(tabId, text, ta)`; `md()`/`mdFile()` renderer → shared `_initMarked()`; Enter key handling x3 → shared `setupTextareaInput(ta, sendFn)`; removed duplicate `.fb-reader-body` CSS block (28 lines); removed duplicate `cursor:pointer` on `.sb-win`
 - Net: 128 insertions, 181 deletions. Server restarted and verified (18ms page load, all endpoints 200)
-
-### Session 2026-03-13 (notepad per-tab + gauge 1M)
-- Notepad panel tracks open state per-tab via `tabStates[id].notepadOpen`
-- Gauge updated for CC's 1M context window: `GAUGE_THRESHOLD` split into 200K and 1M variants
 
 ## Up Next
 - Investigate iOS Safari blank timestamps on actual device
