@@ -40,7 +40,8 @@ _gauge_locks = {}      # "session:window" → {"stem", "pid", "path"} — perman
 _gauge_sent = {}       # "session:window" → [str] — recent texts sent via api_send (for matching)
 GAUGE_CACHE_TTL = 30   # seconds
 GAUGE_MATCH_TTL = 5    # seconds — faster poll while unmatched windows exist
-GAUGE_THRESHOLD = 170_000  # just above empirical auto-compact ceiling (~168k max observed)
+GAUGE_THRESHOLD_200K = 170_000  # auto-compact ceiling for 200k context (~168k max observed)
+GAUGE_THRESHOLD_1M = 1_000_000  # 1M context window (auto-compact ceiling TBD — using full window for now)
 _GAUGE_LOCKS_FILE = Path.home() / ".mobile-terminal-gauge-locks.json"
 
 
@@ -69,12 +70,14 @@ _gauge_load_locks()
 
 
 def _gauge_extract_usage(jsonl_path: str) -> tuple:
-    """Parse JSONL transcript, return (usage_list, last_message_ts_epoch).
+    """Parse JSONL transcript, return (usage_list, last_message_ts_epoch, model).
     usage_list: [{total_input, output, timestamp}] from assistant turns.
     last_message_ts_epoch: epoch seconds of last user/assistant message (for activity age).
+    model: model name string from the most recent assistant message (or None).
     """
     usage = []
     last_ts_str = None
+    model = None
     with open(jsonl_path) as f:
         for line in f:
             line = line.strip()
@@ -90,7 +93,10 @@ def _gauge_extract_usage(jsonl_path: str) -> tuple:
                 last_ts_str = ts
             if etype != "assistant":
                 continue
-            u = entry.get("message", {}).get("usage", {})
+            msg = entry.get("message", {})
+            if msg.get("model"):
+                model = msg["model"]
+            u = msg.get("usage", {})
             if not u:
                 continue
             total = (u.get("input_tokens", 0) or 0) + \
@@ -108,10 +114,17 @@ def _gauge_extract_usage(jsonl_path: str) -> tuple:
             last_epoch = int(dt.timestamp())
         except Exception:
             pass
-    return usage, last_epoch
+    return usage, last_epoch, model
 
 
-def _gauge_compute(usage: list, last_ts: int = None, threshold: int = GAUGE_THRESHOLD) -> dict:
+def _gauge_threshold_for_model(model: str) -> int:
+    """Return the appropriate gauge threshold based on model context window size."""
+    if model and "1m" in model:
+        return GAUGE_THRESHOLD_1M
+    return GAUGE_THRESHOLD_200K
+
+
+def _gauge_compute(usage: list, last_ts: int = None, threshold: int = GAUGE_THRESHOLD_200K) -> dict:
     """Compute context gauge metrics from usage data."""
     if not usage:
         return None
@@ -227,8 +240,9 @@ def _gauge_extract_tmux_texts(session, window):
 
 def _gauge_cache_metrics(cache, key, path, session_id, matched_type):
     """Extract usage from JSONL and compute gauge metrics into cache."""
-    usage, last_ts = _gauge_extract_usage(path)
-    metrics = _gauge_compute(usage, last_ts=last_ts)
+    usage, last_ts, model = _gauge_extract_usage(path)
+    threshold = _gauge_threshold_for_model(model)
+    metrics = _gauge_compute(usage, last_ts=last_ts, threshold=threshold)
     if metrics:
         metrics["session_id"] = session_id
         metrics["matched"] = matched_type
@@ -3567,7 +3581,19 @@ function focusTab(tabId) {
       if (paneEl) paneEl.classList.toggle('file-tab-active', ft && ft.type === 'file');
       updateLayout(); // also hides global bar for file tabs in single-pane mode
       if (ft && ft.type !== 'file') {
-        updateNotepadContent(p.id);
+        // Close/reopen notepad based on per-tab state
+        const npPanel = document.getElementById('pane-' + p.id)?.querySelector('.notepad-panel');
+        if (tabChanged) {
+          if (npPanel && npPanel.classList.contains('open')) {
+            npPanel.classList.remove('open');
+            document.getElementById('pane-' + p.id)?.querySelector('.pane-notepad-btn')?.classList.remove('active');
+          }
+          if (state && state.notepadOpen) {
+            toggleNotepad(p.id);
+          }
+        } else {
+          updateNotepadContent(p.id);
+        }
         updateQueueContent(p.id);
       }
       updatePolling();
@@ -3843,6 +3869,8 @@ function toggleNotepad(paneId) {
   if (panel && panel.classList.contains('open')) {
     panel.classList.remove('open');
     paneEl.querySelector('.pane-notepad-btn')?.classList.remove('active');
+    const pane = panes.find(p => p.id === paneId);
+    if (pane && pane.activeTabId && tabStates[pane.activeTabId]) tabStates[pane.activeTabId].notepadOpen = false;
     return;
   }
   const pane = panes.find(p => p.id === paneId);
@@ -3909,6 +3937,7 @@ function toggleNotepad(paneId) {
   } else { ta.value = ''; }
   panel.classList.add('open');
   paneEl.querySelector('.pane-notepad-btn')?.classList.add('active');
+  if (tabStates[pane.activeTabId]) tabStates[pane.activeTabId].notepadOpen = true;
   ta.focus();
 }
 

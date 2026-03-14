@@ -1,8 +1,13 @@
 # Past Work
 
-Items moved from CURRENT_WORK.md on 2026-03-10.
+## 2026-03-10
+- Gauge threshold & fresh eviction — GAUGE_THRESHOLD changed from 165k to 170k (empirically derived from 18 compression points); fresh CC sessions evict gauge locks
+- Sidebar timestamps & simplification — JSONL-based `gauge_last_ts` replaces unreliable tmux `window_activity`; fresh/cleared session detection
+- Performance & code quality sweep — all async endpoint handlers now use `run_in_executor`; caching and helper extraction
+- Gauge matching redesign — text-based scoring replaces mtime heuristic; `_gauge_locks` persisted to disk
 
 ## 2026-03-09
+- Gauge stability fix — sticky match cache replaces unstable activity-based JSONL matching
 - Context gauge UX — moved to input bar, fixed % remaining semantics, unified `_ctxCls()` color coding
 - Context gauge integration — inlined JSONL-based context window utilization, per-window matching, sidebar/pane/modal display
 

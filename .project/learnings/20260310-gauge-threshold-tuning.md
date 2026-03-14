@@ -1,31 +1,29 @@
 ---
 type: gotcha
-tags: [gauge, context, threshold, compression, auto-compact]
+tags: [gauge, context, threshold, compression, auto-compact, 1m]
 created: 2026-03-10
 ---
 
-# Gauge Threshold Must Match CC Auto-Compact Ceiling
+# Gauge Threshold Must Match CC Auto-Compact Ceiling (Per-Model)
 
 ## What
-`GAUGE_THRESHOLD` must be set just above the empirical auto-compact trigger point (~170k), NOT the full model context window (200k) and NOT the mean compression point (165k).
+Gauge threshold is per-model, not a single constant. `_gauge_extract_usage` returns the model name from JSONL; `_gauge_threshold_for_model()` picks the right threshold. Currently: 170k for 200k-context models, 1M for 1M-context models.
 
 ## Context
-User reported gauge showing 1% remaining when CC wasn't showing any warning (threshold was 165k, session at 164k tokens). Raised to 200k, then user reported gauge showing 17% remaining while CC was actively compacting.
+User reported gauge showing 1% remaining when CC wasn't showing any warning (threshold was 165k, session at 164k tokens). Raised to 200k, then user reported gauge showing 17% remaining while CC was actively compacting. Fixed with 170k for 200k models. Later, CC added 1M context window support — threshold split into per-model constants.
 
 ## What Didn't Work
-- **165k threshold**: Too tight. Sessions at 164k showed 0.6% remaining even though CC's status bar showed no context warning. Technically the session WAS about to compact, but the number felt misleading.
-- **200k threshold**: Too loose. When CC actually compacted at ~167k tokens, the gauge showed 17% remaining — clearly wrong since context was at its limit.
+- **165k threshold**: Too tight. Sessions at 164k showed 0.6% remaining even though CC's status bar showed no context warning.
+- **200k threshold**: Too loose. When CC actually compacted at ~167k tokens, the gauge showed 17% remaining.
+- **Single global threshold**: Wrong for mixed-model environments (200k + 1M sessions).
 
 ## What Works
-- **170k threshold**: Derived from 18 observed compression events. Max was 168,248, median 166,624. The 170k value means:
-  - At 164k: ~3.5% remaining (appropriately low)
-  - At 167k: ~1.8% remaining (matches compacting state)
-  - At 100k: ~41% remaining (healthy mid-session)
-- CC's "Context left until auto-compact: X%" in the status bar uses a similar denominator
-
-## Also Fixed
-- `cc_fresh` detection now evicts gauge locks: when `/clear` is used (same PID, new JSONL), the old lock is deleted and gauge data suppressed until a new conversation starts
+- **GAUGE_THRESHOLD_200K = 170k**: Derived from 18 observed compression events. Max was 168,248, median 166,624.
+- **GAUGE_THRESHOLD_1M = 1M**: Full window for now — auto-compact ceiling TBD (needs empirical observation).
+- **Model detection**: `message.model` field in assistant JSONL entries; `"1m"` substring check distinguishes 1M models.
 
 ## Key Files
-- `server.py` line 43: `GAUGE_THRESHOLD = 170_000`
-- `server.py` ~line 672: fresh eviction in `get_dashboard()`
+- `server.py` lines 43-44: `GAUGE_THRESHOLD_200K` / `GAUGE_THRESHOLD_1M`
+- `server.py` `_gauge_threshold_for_model()`: model → threshold mapping
+- `server.py` `_gauge_extract_usage()`: returns `(usage, last_ts, model)` tuple
+- `server.py` `_gauge_cache_metrics()`: passes model-aware threshold to `_gauge_compute()`
