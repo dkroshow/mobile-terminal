@@ -8,3 +8,4 @@
 | 2026-03-10 | gotcha | gauge, context, threshold, compression, auto-compact | GAUGE_THRESHOLD must be ~170k (just above empirical auto-compact ceiling), not 165k or 200k | 20260310-gauge-threshold-tuning.md |
 | 2026-03-13 | gotcha | send, textarea, draft, async, race-condition, focusTab | Async send + focusTab draft save race — must backup text in tabStates before clearing textarea | 20260313-send-text-loss-race.md |
 | 2026-03-13 | gotcha | async, event-loop, run_in_executor, css, sort, duplication | Recurring bug patterns: event-loop blocking on new endpoints, logic duplication, sort comparator sign errors | 20260313-quality-deep-clean.md |
+| 2026-03-13 | gotcha | tmux, race-condition, new-window | tmux new-window -P output must be used directly — separate display-message has race condition | 20260313-new-window-race.md |

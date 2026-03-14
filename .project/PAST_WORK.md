@@ -1,6 +1,7 @@
 # Past Work
 
 ## 2026-03-13
+- Text loss bug fix — `_sendingText` backup, inner try-catch, backend returns actual success/failure
 - Notepad per-tab visibility — notes panel closes on tab switch, reopens when switching back
 - New Window popup — modal with pre-populated directory, Claude Code + DSP checkboxes
 - Deploy perf fix — server at 95.5% CPU from stale blocking code; restart dropped to 1.1%

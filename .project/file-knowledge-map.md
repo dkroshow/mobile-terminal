@@ -10,4 +10,5 @@
 | server.py | learnings/20260310-gauge-threshold-tuning.md | 2026-03-13 |
 | server.py | learnings/20260313-send-text-loss-race.md | 2026-03-13 |
 | server.py | learnings/20260313-quality-deep-clean.md | 2026-03-13 |
+| server.py | learnings/20260313-new-window-race.md | 2026-03-13 |
 | ~/Library/LaunchAgents/com.kd.mobile-terminal.plist | learnings/20260304-server-restart-after-edit.md | 2026-03-13 |
