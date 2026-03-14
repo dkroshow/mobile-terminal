@@ -1,5 +1,10 @@
 # Past Work
 
+## 2026-03-13
+- Notepad per-tab visibility — notes panel closes on tab switch, reopens when switching back
+- New Window popup — modal with pre-populated directory, Claude Code + DSP checkboxes
+- Deploy perf fix — server at 95.5% CPU from stale blocking code; restart dropped to 1.1%
+
 ## 2026-03-10
 - Gauge threshold & fresh eviction — GAUGE_THRESHOLD changed from 165k to 170k (empirically derived from 18 compression points); fresh CC sessions evict gauge locks
 - Sidebar timestamps & simplification — JSONL-based `gauge_last_ts` replaces unreliable tmux `window_activity`; fresh/cleared session detection

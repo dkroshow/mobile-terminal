@@ -7,7 +7,7 @@ created: 2026-03-13
 # Send Text Loss — Async/Draft Race Condition
 
 ## What
-Submitted text can vanish when `sendToPane`/`sendGlobal` clears the textarea optimistically before `await fetch()`, and `focusTab` runs during the await (saving the empty textarea as the tab's draft).
+Submitted text can vanish when `_sendCmd` (shared send logic, called by `sendToPane`/`sendGlobal`) clears the textarea optimistically before `await fetch()`, and `focusTab` runs during the await (saving the empty textarea as the tab's draft).
 
 ## Context
 User reported text disappearing on desktop — typed text, pressed Enter, text vanished without being delivered. Happened multiple times.
@@ -23,5 +23,5 @@ Three-part fix:
 3. **Backend failure propagation**: `send_keys()` returns bool, `/api/send` returns 500 on tmux failure. Previously always returned `{"ok": true}`.
 
 ## Key Files
-- `server.py` — `sendToPane()`, `sendGlobal()`, `focusTab()` draft save, `send_keys()`, `api_send()`
+- `server.py` — `_sendCmd()` (shared send logic), `sendToPane()`, `sendGlobal()`, `focusTab()` draft save, `send_keys()`, `api_send()`
 - `.project/research/text-loss-bug.md` — full analysis

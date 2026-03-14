@@ -768,11 +768,10 @@ def new_window(session=None, cwd=None, commands=None):
     work_dir = cwd or WORK_DIR
     if not Path(work_dir).is_dir():
         work_dir = str(Path.home())
-    _run(["tmux", "new-window", "-t", target, "-c", work_dir, "-P", "-F", "#{window_index}"],
-         capture_output=True, text=True)
-    # Get the new window's index (it's the active window now)
-    r = _run(["tmux", "display-message", "-t", target, "-p", "#{window_index}"],
+    r = _run(["tmux", "new-window", "-t", target, "-c", work_dir, "-P", "-F", "#{window_index}"],
              capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
     new_idx = r.stdout.strip()
     # Send startup commands if any
     if commands and new_idx:
@@ -867,7 +866,7 @@ HTML = """\
   --border: rgba(255,255,255,0.07); --border2: rgba(255,255,255,0.12);
   --text: #e8e6e3; --text2: #8a8a8a; --text3: #5a5a5a;
   --accent: #D97757; --accent2: #c4693e; --accent-dim: rgba(217,119,87,0.12);
-  --accent-focus: var(--accent-focus); --red: #e5534b;
+  --accent-focus: rgba(217,119,87,0.5); --red: #e5534b;
   --green: #3fb950; --orange: #d29922;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -944,7 +943,7 @@ html, body { height:100%; background:var(--bg); color:var(--text);
 .sb-hidden-header:hover { color:var(--text2); }
 .sb-hidden-chevron { transition:transform .15s; font-size:10px; }
 .sb-hidden-chevron.open { transform:rotate(90deg); }
-.sb-win { display:flex; align-items:center; gap:8px; padding:6px 4px; cursor:pointer;
+.sb-win { display:flex; align-items:center; gap:8px; padding:6px 4px;
   border-radius:8px; cursor:pointer; transition:all .12s;
   -webkit-user-select:none; user-select:none; }
 .sb-win:hover { background:var(--surface); }
@@ -1597,35 +1596,6 @@ a.file-link:active { opacity:0.6; }
 /* File tab hides input bar */
 .pane.file-tab-active .pane-input { display:none; }
 
-/* File browser markdown reader */
-.fb-reader { max-width:700px; margin:0 auto; padding:16px 20px 40px; }
-.fb-reader-title { font-size:15px; font-weight:600; color:var(--text3);
-  margin-bottom:16px; padding-bottom:10px; border-bottom:1px solid var(--border); }
-.fb-reader-body { color:var(--text); font-size:var(--text-size); line-height:1.65; }
-.fb-reader-body h1,.fb-reader-body h2,.fb-reader-body h3,
-.fb-reader-body h4,.fb-reader-body h5,.fb-reader-body h6 {
-  color:var(--text); margin:1.2em 0 0.5em; font-weight:600; }
-.fb-reader-body h1 { font-size:1.5em; } .fb-reader-body h2 { font-size:1.3em; }
-.fb-reader-body h3 { font-size:1.15em; }
-.fb-reader-body p { margin:0.6em 0; }
-.fb-reader-body code { background:var(--surface); padding:2px 5px;
-  border-radius:4px; font-size:0.9em; font-family:'SF Mono',ui-monospace,Menlo,monospace; }
-.fb-reader-body pre { background:var(--surface); padding:12px 14px;
-  border-radius:8px; overflow-x:auto; margin:0.8em 0; }
-.fb-reader-body pre code { background:none; padding:0; font-size:0.85em; }
-.fb-reader-body blockquote { border-left:3px solid var(--accent); margin:0.8em 0;
-  padding:4px 14px; color:var(--text2); }
-.fb-reader-body ul,.fb-reader-body ol { padding-left:1.5em; margin:0.5em 0; }
-.fb-reader-body li { margin:0.3em 0; }
-.fb-reader-body a { color:var(--accent); text-decoration:none; }
-.fb-reader-body a:hover { text-decoration:underline; }
-.fb-reader-body table { border-collapse:collapse; width:100%; margin:0.8em 0; }
-.fb-reader-body th,.fb-reader-body td { border:1px solid var(--border2);
-  padding:6px 10px; font-size:13px; text-align:left; }
-.fb-reader-body th { background:var(--surface); font-weight:600; }
-.fb-reader-body img { max-width:100%; border-radius:8px; }
-.fb-reader-body hr { border:none; border-top:1px solid var(--border); margin:1.5em 0; }
-
 /* File editor */
 .file-editor-wrap { flex:1; display:flex; flex-direction:column; min-height:0; }
 .file-editor { flex:1; width:100%; margin:0; padding:12px 16px; border:none; outline:none;
@@ -1943,17 +1913,21 @@ function renderRawWithTables(raw) {
   if (buf.length) parts.push(esc(buf.join('\\n')));
   return parts.join('');
 }
+function _initMarked() {
+  if (typeof marked === 'undefined') return false;
+  const renderer = new marked.Renderer();
+  renderer.link = function(href, title, text) {
+    const h = typeof href === 'object' ? href.href : href;
+    const t = typeof href === 'object' ? href.title : title;
+    const tx = typeof href === 'object' ? href.text : text;
+    return '<a href="' + h + '" target="_blank" rel="noopener noreferrer"' + (t ? ' title="' + t + '"' : '') + '>' + tx + '</a>';
+  };
+  marked.setOptions({ breaks: false, renderer: renderer });
+  return true;
+}
 function md(s) {
-  if (typeof marked !== 'undefined') {
+  if (_initMarked()) {
     try {
-      const renderer = new marked.Renderer();
-      renderer.link = function(href, title, text) {
-        const h = typeof href === 'object' ? href.href : href;
-        const t = typeof href === 'object' ? href.title : title;
-        const tx = typeof href === 'object' ? href.text : text;
-        return '<a href="' + h + '" target="_blank" rel="noopener noreferrer"' + (t ? ' title="' + t + '"' : '') + '>' + tx + '</a>';
-      };
-      marked.setOptions({ breaks: false, renderer: renderer });
       // Split into table blocks and text blocks
       const allLines = s.split('\\n');
       const segments = []; let textBuf = []; let li = 0;
@@ -2250,18 +2224,8 @@ document.getElementById('fb-breadcrumbs').addEventListener('click', function(e) 
 
 // === File Browser (sidebar-integrated) ===
 function mdFile(s) {
-  if (typeof marked !== 'undefined') {
-    try {
-      const renderer = new marked.Renderer();
-      renderer.link = function(href, title, text) {
-        const h = typeof href === 'object' ? href.href : href;
-        const t = typeof href === 'object' ? href.title : title;
-        const tx = typeof href === 'object' ? href.text : text;
-        return '<a href="' + h + '" target="_blank" rel="noopener noreferrer"' + (t ? ' title="' + t + '"' : '') + '>' + tx + '</a>';
-      };
-      marked.setOptions({ breaks: false, renderer: renderer });
-      return marked.parse(s);
-    } catch(e) {}
+  if (_initMarked()) {
+    try { return marked.parse(s); } catch(e) {}
   }
   return '<pre>' + s.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</pre>';
 }
@@ -3312,23 +3276,7 @@ function createPane(parentEl) {
   // Pane input handlers
   const ta = el.querySelector('.pane-input textarea');
   const sendBtn = el.querySelector('.pane-send');
-  const paneResize = () => { const max=window.innerHeight*0.4; ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,max)+'px'; ta.style.overflowY=ta.scrollHeight>max?'auto':'hidden'; };
-  ta.addEventListener('input', paneResize);
-  ta.addEventListener('paste', () => setTimeout(paneResize, 0));
-  // Enter: keydown for desktop, beforeinput fallback for mobile Chrome (fires key='Process')
-  let _pEnterHandled = false, _pShift = false;
-  ta.addEventListener('keydown', e => {
-    _pShift = e.shiftKey;
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _pEnterHandled = true; if (ta.value.trim()) sendToPane(id); else keyActive('Enter'); }
-    if (!ta.value && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); keyActive(e.key === 'ArrowUp' ? 'Up' : 'Down'); }
-    if (!ta.value && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); keyActive(e.key === 'ArrowLeft' ? 'Left' : 'Right'); }
-    if (!ta.value && e.key === 'Escape') { e.preventDefault(); keyActive('Escape'); }
-    if (!ta.value && e.key === 'Tab') { e.preventDefault(); keyActive('Tab'); }
-  });
-  ta.addEventListener('beforeinput', e => {
-    if (e.inputType === 'insertLineBreak' && !_pEnterHandled && !_pShift) { e.preventDefault(); if (ta.value.trim()) sendToPane(id); else keyActive('Enter'); }
-    _pEnterHandled = false;
-  });
+  setupTextareaInput(ta, () => sendToPane(id));
   sendBtn.addEventListener('click', () => sendToPane(id));
   // Click anywhere on pane to focus it
   el.addEventListener('mousedown', () => focusPane(id));
@@ -3588,7 +3536,7 @@ function focusTab(tabId) {
             npPanel.classList.remove('open');
             document.getElementById('pane-' + p.id)?.querySelector('.pane-notepad-btn')?.classList.remove('active');
           }
-          if (state && state.notepadOpen) {
+          if (tabStates[tabId] && tabStates[tabId].notepadOpen) {
             toggleNotepad(p.id);
           }
         } else {
@@ -4648,25 +4596,15 @@ function getActiveTab() {
   return { tabId: pane.activeTabId, tab: allTabs[pane.activeTabId], state: tabStates[pane.activeTabId] };
 }
 
-async function sendToPane(paneId) {
-  const pane = panes.find(p => p.id === paneId);
-  if (!pane || !pane.activeTabId) return;
-  const tabId = pane.activeTabId;
-  if (allTabs[tabId] && allTabs[tabId].type === 'file') return;
-  const paneEl = document.getElementById('pane-' + paneId);
-  if (!paneEl) return;
-  const ta = paneEl.querySelector('.pane-input textarea');
-  if (!ta) return;
-  const text = ta.value; if (!text) return;
-  const tab = allTabs[tabId];
-  const state = tabStates[tabId];
-  if (!tab || !state) return;
-  // Save backup in state BEFORE clearing textarea — protects against draft system race
+async function _sendCmd(tabId, text, ta) {
+  // Shared send logic — ta is the textarea to clear/restore
+  const tab = allTabs[tabId]; const state = tabStates[tabId];
+  if (!tab || !state || tab.type === 'file') return;
+  // Save backup BEFORE clearing — protects against draft system race
   state._sendingText = text;
   ta.value = ''; ta.style.height = 'auto'; ta.style.overflowY = 'hidden';
   try {
     state.pendingMsg = text; state.pendingTime = Date.now(); state.awaitingResponse = true;
-    // Pause queue on manual send
     const qs = _queueStates[tabId];
     if (qs && qs.playing) pauseQueue(tabId);
     try {
@@ -4680,43 +4618,27 @@ async function sendToPane(paneId) {
     if (!resp.ok) throw new Error('send failed: ' + resp.status);
     state._sendingText = null;
   } catch(e) {
-    console.warn('sendToPane failed:', e);
+    console.warn('_sendCmd failed:', e);
     state._sendingText = null;
-    // Restore text — re-query textarea in case pane was restructured
-    const ta2 = document.querySelector('#pane-' + paneId + ' .pane-input textarea');
-    if (ta2) { ta2.value = text; ta2.dispatchEvent(new Event('input')); }
+    ta.value = text; ta.dispatchEvent(new Event('input'));
     state.pendingMsg = null; state.awaitingResponse = false;
   }
 }
 
+async function sendToPane(paneId) {
+  const pane = panes.find(p => p.id === paneId);
+  if (!pane || !pane.activeTabId) return;
+  const paneEl = document.getElementById('pane-' + paneId);
+  if (!paneEl) return;
+  const ta = paneEl.querySelector('.pane-input textarea');
+  if (!ta || !ta.value) return;
+  await _sendCmd(pane.activeTabId, ta.value, ta);
+}
+
 async function sendGlobal() {
-  const text = M.value; if (!text) return;
+  if (!M.value) return;
   const active = getActiveTab(); if (!active) return;
-  if (allTabs[active.tabId] && allTabs[active.tabId].type === 'file') return;
-  // Save backup in state BEFORE clearing textarea — protects against draft system race
-  active.state._sendingText = text;
-  M.value = ''; M.style.height = 'auto'; M.style.overflowY = 'hidden';
-  try {
-    active.state.pendingMsg = text; active.state.pendingTime = Date.now(); active.state.awaitingResponse = true;
-    // Pause queue on manual send
-    const qsg = _queueStates[active.tabId];
-    if (qsg && qsg.playing) pauseQueue(active.tabId);
-    try {
-      const outEl = document.getElementById('tab-output-' + active.tabId);
-      if (outEl) { renderOutput(active.state.rawContent || active.state.last, outEl, active.state, active.tabId); outEl.scrollTop = outEl.scrollHeight; }
-    } catch(re) {} // renderOutput failure must not abort send
-    const resp = await fetch('/api/send', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ cmd: text, session: active.tab.session, window: active.tab.windowIndex, windowName: active.tab.windowName || '' })
-    });
-    if (!resp.ok) throw new Error('send failed: ' + resp.status);
-    active.state._sendingText = null;
-  } catch(e) {
-    console.warn('sendGlobal failed:', e);
-    active.state._sendingText = null;
-    M.value = text; M.dispatchEvent(new Event('input'));
-    active.state.pendingMsg = null; active.state.awaitingResponse = false;
-  }
+  await _sendCmd(active.tabId, M.value, M);
 }
 
 async function keyActive(k) {
@@ -4903,7 +4825,7 @@ function renderSidebar() {
     const ib = _sidebarOrder.sessions.indexOf(b.name);
     if (ia < 0 && ib < 0) return 0;
     if (ia < 0) return 1;
-    if (ib < 0) return 1;
+    if (ib < 0) return -1;
     return ia - ib;
   });
   // Determine the active window for highlighting
@@ -4937,7 +4859,7 @@ function renderSidebarSession(s, activeTab, isHidden) {
     const ib = winOrder.indexOf(b.index);
     if (ia < 0 && ib < 0) return 0;
     if (ia < 0) return 1;
-    if (ib < 0) return 1;
+    if (ib < 0) return -1;
     return ia - ib;
   });
   const fsEsc = esc(s.name).replace(/'/g, "\\\\'");
@@ -5368,28 +5290,26 @@ async function submitNewWin() {
 }
 
 // === Input ===
-function autoResize() {
-  const max = window.innerHeight * 0.4;
-  M.style.height = 'auto';
-  M.style.height = Math.min(M.scrollHeight, max) + 'px';
-  M.style.overflowY = M.scrollHeight > max ? 'auto' : 'hidden';
+// Shared textarea setup: auto-resize, Enter/key-forwarding, mobile beforeinput fallback
+function setupTextareaInput(ta, sendFn) {
+  const resize = () => { const max=window.innerHeight*0.4; ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,max)+'px'; ta.style.overflowY=ta.scrollHeight>max?'auto':'hidden'; };
+  ta.addEventListener('input', resize);
+  ta.addEventListener('paste', () => setTimeout(resize, 0));
+  let _enterHandled = false, _shift = false;
+  ta.addEventListener('keydown', e => {
+    _shift = e.shiftKey;
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _enterHandled = true; if (ta.value.trim()) sendFn(); else keyActive('Enter'); }
+    if (!ta.value && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); keyActive(e.key === 'ArrowUp' ? 'Up' : 'Down'); }
+    if (!ta.value && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); keyActive(e.key === 'ArrowLeft' ? 'Left' : 'Right'); }
+    if (!ta.value && e.key === 'Escape') { e.preventDefault(); keyActive('Escape'); }
+    if (!ta.value && e.key === 'Tab') { e.preventDefault(); keyActive('Tab'); }
+  });
+  ta.addEventListener('beforeinput', e => {
+    if (e.inputType === 'insertLineBreak' && !_enterHandled && !_shift) { e.preventDefault(); if (ta.value.trim()) sendFn(); else keyActive('Enter'); }
+    _enterHandled = false;
+  });
 }
-M.addEventListener('input', autoResize);
-M.addEventListener('paste', () => setTimeout(autoResize, 0));
-// Enter: keydown for desktop, beforeinput fallback for mobile Chrome (fires key='Process')
-let _gEnterHandled = false, _gShift = false;
-M.addEventListener('keydown', e => {
-  _gShift = e.shiftKey;
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _gEnterHandled = true; if (M.value.trim()) sendGlobal(); else keyActive('Enter'); }
-  if (!M.value && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); keyActive(e.key === 'ArrowUp' ? 'Up' : 'Down'); }
-  if (!M.value && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); keyActive(e.key === 'ArrowLeft' ? 'Left' : 'Right'); }
-  if (!M.value && e.key === 'Escape') { e.preventDefault(); keyActive('Escape'); }
-  if (!M.value && e.key === 'Tab') { e.preventDefault(); keyActive('Tab'); }
-});
-M.addEventListener('beforeinput', e => {
-  if (e.inputType === 'insertLineBreak' && !_gEnterHandled && !_gShift) { e.preventDefault(); if (M.value.trim()) sendGlobal(); else keyActive('Enter'); }
-  _gEnterHandled = false;
-});
+setupTextareaInput(M, sendGlobal);
 
 // === iOS keyboard ===
 if (window.visualViewport) {
@@ -5815,18 +5735,23 @@ def _save_prefs(data: dict):
 
 @app.get("/api/prefs")
 async def api_get_prefs():
-    return JSONResponse(_load_prefs())
+    loop = asyncio.get_running_loop()
+    data = await loop.run_in_executor(None, _load_prefs)
+    return JSONResponse(data)
 
 
 @app.put("/api/prefs")
 async def api_put_prefs(body: dict):
-    data = _load_prefs()
-    for k, v in body.items():
-        if v is None:
-            data.pop(k, None)
-        else:
-            data[k] = v
-    _save_prefs(data)
+    def _do():
+        data = _load_prefs()
+        for k, v in body.items():
+            if v is None:
+                data.pop(k, None)
+            else:
+                data[k] = v
+        _save_prefs(data)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _do)
     return JSONResponse({"ok": True})
 
 
@@ -5866,19 +5791,18 @@ def _is_path_allowed(path, roots):
     return False
 
 
-@app.get("/api/files")
-async def api_list_files(path: str):
+def _list_files_sync(path):
     roots = _get_session_cwds()
     resolved = os.path.realpath(path)
     if not _is_path_allowed(resolved, roots):
-        return JSONResponse({"detail": "Access denied: path outside session directories"}, status_code=403)
+        return {"detail": "Access denied: path outside session directories"}, 403
     if not os.path.isdir(resolved):
-        return JSONResponse({"detail": "Not a directory"}, status_code=404)
+        return {"detail": "Not a directory"}, 404
     items = []
     try:
         entries = sorted(os.scandir(resolved), key=lambda e: (not e.is_dir(), e.name.lower()))
     except PermissionError:
-        return JSONResponse({"detail": "Permission denied"}, status_code=403)
+        return {"detail": "Permission denied"}, 403
     for entry in entries:
         if entry.name in ('.', '..', '.git', '__pycache__', 'node_modules', '.DS_Store'):
             continue
@@ -5890,78 +5814,100 @@ async def api_list_files(path: str):
                 items.append({"name": entry.name, "type": "file", "path": os.path.join(resolved, entry.name), "size": st.st_size})
             except OSError:
                 pass
-    # Compute parent (None if at a root)
     parent = os.path.dirname(resolved)
     if not _is_path_allowed(parent, roots) or parent == resolved:
         parent = None
-    return JSONResponse({"path": resolved, "parent": parent, "items": items, "allowed_roots": sorted(roots)})
+    return {"path": resolved, "parent": parent, "items": items, "allowed_roots": sorted(roots)}, 200
 
 
-@app.get("/api/files/read")
-async def api_read_file(path: str):
+@app.get("/api/files")
+async def api_list_files(path: str):
+    loop = asyncio.get_running_loop()
+    data, status = await loop.run_in_executor(None, _list_files_sync, path)
+    return JSONResponse(data, status_code=status)
+
+
+def _read_file_sync(path):
     roots = _get_session_cwds()
     resolved = os.path.realpath(path)
     if not _is_path_allowed(resolved, roots):
-        return JSONResponse({"detail": "Access denied: path outside session directories"}, status_code=403)
+        return {"detail": "Access denied: path outside session directories"}, 403
     if not os.path.isfile(resolved):
-        return JSONResponse({"detail": "File not found"}, status_code=404)
+        return {"detail": "File not found"}, 404
     try:
         size = os.path.getsize(resolved)
     except OSError:
-        return JSONResponse({"detail": "Cannot access file"}, status_code=403)
-    if size > 1_048_576:  # 1MB limit
-        return JSONResponse({"detail": "File too large (>1MB)"}, status_code=413)
+        return {"detail": "Cannot access file"}, 403
+    if size > 1_048_576:
+        return {"detail": "File too large (>1MB)"}, 413
     try:
         with open(resolved, 'r', encoding='utf-8', errors='replace') as f:
             content = f.read()
     except (OSError, PermissionError):
-        return JSONResponse({"detail": "Cannot read file"}, status_code=403)
+        return {"detail": "Cannot read file"}, 403
     name = os.path.basename(resolved)
     mtime = os.path.getmtime(resolved)
-    return JSONResponse({"path": resolved, "name": name, "content": content, "size": size, "mtime": mtime})
+    return {"path": resolved, "name": name, "content": content, "size": size, "mtime": mtime}, 200
+
+
+@app.get("/api/files/read")
+async def api_read_file(path: str):
+    loop = asyncio.get_running_loop()
+    data, status = await loop.run_in_executor(None, _read_file_sync, path)
+    return JSONResponse(data, status_code=status)
+
+
+def _file_mtime_sync(path):
+    roots = _get_session_cwds()
+    resolved = os.path.realpath(path)
+    if not _is_path_allowed(resolved, roots):
+        return {"detail": "Access denied"}, 403
+    if not os.path.isfile(resolved):
+        return {"detail": "File not found"}, 404
+    try:
+        mtime = os.path.getmtime(resolved)
+    except OSError:
+        return {"detail": "Cannot access file"}, 403
+    return {"path": resolved, "mtime": mtime}, 200
 
 
 @app.get("/api/files/mtime")
 async def api_file_mtime(path: str):
-    roots = _get_session_cwds()
-    resolved = os.path.realpath(path)
-    if not _is_path_allowed(resolved, roots):
-        return JSONResponse({"detail": "Access denied"}, status_code=403)
-    if not os.path.isfile(resolved):
-        return JSONResponse({"detail": "File not found"}, status_code=404)
-    try:
-        mtime = os.path.getmtime(resolved)
-    except OSError:
-        return JSONResponse({"detail": "Cannot access file"}, status_code=403)
-    return JSONResponse({"path": resolved, "mtime": mtime})
+    loop = asyncio.get_running_loop()
+    data, status = await loop.run_in_executor(None, _file_mtime_sync, path)
+    return JSONResponse(data, status_code=status)
 
 
-@app.put("/api/files/write")
-async def api_write_file(body: dict):
-    file_path = body.get("path", "")
-    content = body.get("content", "")
-    expected_mtime = body.get("mtime")  # optional conflict detection
+def _write_file_sync(file_path, content, expected_mtime):
     roots = _get_session_cwds()
     resolved = os.path.realpath(file_path)
     if not _is_path_allowed(resolved, roots):
-        return JSONResponse({"detail": "Access denied: path outside session directories"}, status_code=403)
+        return {"detail": "Access denied: path outside session directories"}, 403
     if not os.path.exists(resolved):
-        return JSONResponse({"detail": "File not found"}, status_code=404)
-    # Conflict detection: if caller provided mtime, check it matches
+        return {"detail": "File not found"}, 404
     if expected_mtime is not None:
         try:
             current_mtime = os.path.getmtime(resolved)
         except OSError:
-            return JSONResponse({"detail": "Cannot access file"}, status_code=403)
+            return {"detail": "Cannot access file"}, 403
         if abs(current_mtime - expected_mtime) > 0.01:
-            return JSONResponse({"detail": "File modified on disk since last read", "mtime": current_mtime}, status_code=409)
+            return {"detail": "File modified on disk since last read", "mtime": current_mtime}, 409
     try:
         with open(resolved, 'w', encoding='utf-8') as f:
             f.write(content)
         new_mtime = os.path.getmtime(resolved)
     except (OSError, PermissionError) as e:
-        return JSONResponse({"detail": "Cannot write file: " + str(e)}, status_code=403)
-    return JSONResponse({"ok": True, "mtime": new_mtime})
+        return {"detail": "Cannot write file: " + str(e)}, 403
+    return {"ok": True, "mtime": new_mtime}, 200
+
+
+@app.put("/api/files/write")
+async def api_write_file(body: dict):
+    loop = asyncio.get_running_loop()
+    data, status = await loop.run_in_executor(
+        None, _write_file_sync,
+        body.get("path", ""), body.get("content", ""), body.get("mtime"))
+    return JSONResponse(data, status_code=status)
 
 
 if __name__ == "__main__":
