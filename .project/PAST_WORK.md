@@ -1,6 +1,7 @@
 # Past Work
 
 ## 2026-03-13
+- Code quality deep-clean — `--accent-focus` CSS self-ref fix, 6 endpoints missing `run_in_executor`, sort comparator sign error; 5 deduplication refactors; net -53 lines
 - Text loss bug fix — `_sendingText` backup, inner try-catch, backend returns actual success/failure
 - Notepad per-tab visibility — notes panel closes on tab switch, reopens when switching back
 - New Window popup — modal with pre-populated directory, Claude Code + DSP checkboxes

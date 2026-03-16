@@ -3675,12 +3675,14 @@ function renderPaneTabs(paneId) {
       tab.style.opacity = '';
       _dragSrcTabId = null;
       tabBar.querySelectorAll('.drag-over-left,.drag-over-right').forEach(t => { t.classList.remove('drag-over-left','drag-over-right'); });
+      // Flush deferred renders after drag completes
+      if (_sidebarView === 'sessions') renderSidebar();
+      else renderFileTree();
     });
     tab.addEventListener('dragover', e => {
       e.preventDefault();
-      const dstTabId = parseInt(tab.dataset.tabId);
-      const samePane = _dragSrcTabId && panes.some(p => p.tabIds.includes(_dragSrcTabId) && p.tabIds.includes(dstTabId));
-      if (samePane) {
+      // pane (from closure) already contains this tab — just check if src is also here
+      if (_dragSrcTabId && pane.tabIds.includes(_dragSrcTabId)) {
         e.stopPropagation();
         e.dataTransfer.dropEffect = 'move';
         tabBar.querySelectorAll('.drag-over-left,.drag-over-right').forEach(t => { t.classList.remove('drag-over-left','drag-over-right'); });
@@ -4565,16 +4567,19 @@ async function pollTab(tabId) {
       state.lastOutputChange = Date.now();
       state.last = d.output; state.rawContent = d.output;
     }
-    if (contentChanged || state._scrollToBottom) {
+    if (contentChanged || state._scrollToBottom || state._renderDeferred) {
+      // Defer heavy DOM work during drag to prevent stutter
+      if (_dragSrcTabId !== null || _sbDragging) { state._renderDeferred = true; return; }
       const outEl = document.getElementById('tab-output-' + tabId);
       if (!outEl) return;
       // Skip DOM update while user is selecting text (prevents selection jumping)
       const sel = window.getSelection();
       if (sel && sel.type === 'Range' && outEl.contains(sel.anchorNode)) return;
       const atBottom = state._scrollToBottom || (outEl.scrollHeight - outEl.scrollTop - outEl.clientHeight < 80);
-      if (contentChanged) renderOutput(d.output, outEl, state, tabId);
+      if (contentChanged || state._renderDeferred) renderOutput(d.output, outEl, state, tabId);
       if (atBottom) outEl.scrollTop = outEl.scrollHeight;
       state._scrollToBottom = false;
+      state._renderDeferred = false;
     }
   } catch(e) {}
 }
@@ -5179,8 +5184,11 @@ async function loadDashboard() {
   try {
     const r = await fetch('/api/dashboard');
     _dashboardData = await r.json();
-    if (_sidebarView === 'sessions') renderSidebar();
-    else renderFileTree();
+    const dragging = _dragSrcTabId !== null || _sbDragging;
+    if (!dragging) {
+      if (_sidebarView === 'sessions') renderSidebar();
+      else renderFileTree();
+    }
     // Update tab names and status dots from dashboard
     for (const tid in allTabs) {
       const tab = allTabs[tid];
@@ -5191,8 +5199,10 @@ async function loadDashboard() {
         if (win) {
           if (win.name !== tab.windowName) {
             tab.windowName = win.name;
-            for (const p of panes) {
-              if (p.tabIds.includes(parseInt(tid))) renderPaneTabs(p.id);
+            if (!dragging) {
+              for (const p of panes) {
+                if (p.tabIds.includes(parseInt(tid))) renderPaneTabs(p.id);
+              }
             }
           }
           // Update tab dot from dashboard CC status (covers background tabs)
