@@ -347,8 +347,6 @@ def _refresh_gauge_cache():
             if key not in active_keys or _gauge_locks[key]["pid"] != pid_for_key.get(key):
                 del _gauge_locks[key]
 
-        claimed_stems = {m["stem"] for m in _gauge_locks.values()}
-
         # Pass 1: Refresh metrics for locked windows (no re-matching)
         for cpid, spid in claude_pids:
             pane_info = pane_by_pid.get(spid)
@@ -364,8 +362,16 @@ def _refresh_gauge_cache():
                 continue
             try:
                 _gauge_cache_metrics(cache, key, path, _gauge_locks[key]["stem"], "locked")
+                if key not in cache:
+                    # No usage data — locked JSONL has no assistant messages.
+                    # Likely a stale lock from /clear creating a new JSONL
+                    # while PID stayed the same. Evict to allow re-matching.
+                    del _gauge_locks[key]
             except FileNotFoundError:
                 del _gauge_locks[key]  # JSONL deleted, unlock
+
+        # Rebuild claimed_stems after Pass 1 evictions
+        claimed_stems = {m["stem"] for m in _gauge_locks.values()}
 
         # Pass 2: Match unlocked windows
         # Group unmatched by slug to detect easy vs hard case
