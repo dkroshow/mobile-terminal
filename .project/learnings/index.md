@@ -10,3 +10,4 @@
 | 2026-03-13 | gotcha | async, event-loop, run_in_executor, css, sort, duplication | Recurring bug patterns: event-loop blocking on new endpoints, logic duplication, sort comparator sign errors | 20260313-quality-deep-clean.md |
 | 2026-03-13 | gotcha | tmux, race-condition, new-window | tmux new-window -P output must be used directly — separate display-message has race condition | 20260313-new-window-race.md |
 | 2026-03-16 | gotcha | drag, performance, polling, render, defer, DOM | Heavy DOM renders (renderOutput/renderSidebar) during drag cause stutter — defer with guard flags | 20260316-drag-render-deferral.md |
+| 2026-03-16 | gotcha | gauge, lock, jsonl, eviction, clear, auto-compact | Gauge lock stale when /clear creates new JSONL — evict on empty usage | 20260316-gauge-lock-empty-eviction.md |
